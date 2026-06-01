@@ -18,7 +18,7 @@ const STAT_CARDS = [
   { label: 'Alertas', value: '—', icon: '⚠️', color: '#e53e3e' },
 ];
 
-export default function HomeScreen() {
+export default function HomeScreen({ navigation }) {
   const { colors } = useTheme();
   const { user } = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -85,6 +85,21 @@ export default function HomeScreen() {
 
         {/* Acceso rápido */}
         <Text style={s.sectionTitle}>Acceso rápido</Text>
+
+        {/* POS - Nueva Venta (destacado) */}
+        <TouchableOpacity
+          style={s.posBtn}
+          onPress={() => navigation.navigate('NuevaVenta')}
+          activeOpacity={0.85}
+        >
+          <Text style={s.posIcon}>🛒</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={s.posLabel}>Nueva Venta (POS)</Text>
+            <Text style={s.posDesc}>Punto de venta · Cobro rápido</Text>
+          </View>
+          <Text style={{ color: '#fff', fontSize: 18 }}>→</Text>
+        </TouchableOpacity>
+
         <View style={s.quickGrid}>
           {[
             { icon: '📦', label: 'Inventario' },
@@ -262,4 +277,20 @@ const styles = (c) => StyleSheet.create({
     fontSize: 9,
     fontWeight: '700',
   },
+  posBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1565C0',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    gap: 12,
+    elevation: 4,
+    shadowColor: '#1565C0',
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+  },
+  posIcon:  { fontSize: 30 },
+  posLabel: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  posDesc:  { color: 'rgba(255,255,255,0.7)', fontSize: 11, marginTop: 2 },
 });
