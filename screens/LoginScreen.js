@@ -70,7 +70,7 @@ export default function LoginScreen() {
       <StatusBar barStyle="light-content" backgroundColor="#0d0d0d" translucent={false} />
 
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={s.scroll}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         bounces={false}
@@ -190,6 +190,9 @@ export default function LoginScreen() {
             </RippleButton>
           </View>
 
+          <Text style={s.offlineHint}>
+            Si ya ingresaste antes, puedes iniciar sesión sin internet usando las mismas credenciales.
+          </Text>
           <Text style={s.footer}>© 2026 Distribuidora Birancesco Menijvar</Text>
         </View>
       </ScrollView>
@@ -438,6 +441,15 @@ const styles = (c, isDark) => StyleSheet.create({
   rememberText: {
     color: c.textSec,
     fontSize: 14,
+  },
+
+  offlineHint: {
+    color: c.textMuted,
+    fontSize: 12,
+    marginBottom: 18,
+    textAlign: 'center',
+    lineHeight: 18,
+    opacity: 0.9,
   },
 
   /* Botón */

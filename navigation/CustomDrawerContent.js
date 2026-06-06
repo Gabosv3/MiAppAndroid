@@ -10,12 +10,14 @@ import {
   Dimensions,
   StatusBar,
   TouchableWithoutFeedback,
+  Platform,
 } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { useConnectivity } from '../services/connectivity';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const DRAWER_WIDTH = Math.min(300, SCREEN_WIDTH * 0.78);
+const DRAWER_WIDTH = Math.min(320, SCREEN_WIDTH * 0.85);
 
 const NAV_ITEMS = [
   { name: 'Inicio', icon: '🏠', active: true },
@@ -28,6 +30,7 @@ const NAV_ITEMS = [
 export default function CustomDrawer({ visible, onClose }) {
   const { colors, mode, toggleTheme } = useTheme();
   const { user, logout } = useAuth();
+  const { isOnline } = useConnectivity();
   const translateX = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
 
@@ -72,7 +75,7 @@ export default function CustomDrawer({ visible, onClose }) {
   if (!visible && translateX._value === -DRAWER_WIDTH) return null;
 
   return (
-    <View style={s.root} pointerEvents="box-none">
+    <View style={[s.root, Platform.OS === 'web' ? { pointerEvents: 'box-none' } : null]}>
       {/* Overlay oscuro */}
       <TouchableWithoutFeedback onPress={onClose}>
         <Animated.View style={[s.overlay, { opacity: overlayOpacity }]} />
@@ -80,33 +83,16 @@ export default function CustomDrawer({ visible, onClose }) {
 
       {/* Panel del menú */}
       <Animated.View style={[s.drawer, { transform: [{ translateX }] }]}>
-        {/* Cabecera */}
+        {/* Header Minimal */}
         <View style={s.header}>
-          <View style={s.logoRow}>
-            <View style={s.chipSquareBig} />
-            <View style={s.chipSquaresCol}>
-              <View style={s.chipSquareSmall} />
-              <View style={s.chipSquareSmall} />
-            </View>
-            <Text style={s.logoText}>SIDB</Text>
-          </View>
-          <Text style={s.appName}>Sistema de{'\n'}Inventario</Text>
-
-          {/* Info usuario */}
-          <View style={s.userChip}>
-            <View style={s.avatar}>
-              <Text style={s.avatarText}>{user?.name?.charAt(0) || 'U'}</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={s.userName}>{user?.name || 'Usuario'}</Text>
-              <Text style={s.userEmail} numberOfLines={1}>{user?.email}</Text>
-            </View>
-          </View>
+          <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
+            <Text style={s.closeBtn}>✕</Text>
+          </TouchableOpacity>
         </View>
 
-        {/* Navegación */}
-        <ScrollView style={s.nav} showsVerticalScrollIndicator={false}>
-          <Text style={s.sectionLabel}>MENÚ PRINCIPAL</Text>
+        {/* Navigation */}
+        <ScrollView style={s.navScroll} showsVerticalScrollIndicator={false}>
+          <Text style={s.navSection}>MENÚ</Text>
           {NAV_ITEMS.map((item, i) => (
             <TouchableOpacity
               key={i}
@@ -114,24 +100,21 @@ export default function CustomDrawer({ visible, onClose }) {
               onPress={() => !item.disabled && onClose()}
               activeOpacity={item.disabled ? 1 : 0.7}
             >
-              <Text style={s.navIcon}>{item.icon}</Text>
-              <Text style={[s.navLabel, item.active && s.navLabelActive, item.disabled && s.navLabelDisabled]}>
+              <Text style={s.navItemIcon}>{item.icon}</Text>
+              <Text style={[s.navItemText, item.active && s.navItemTextActive, item.disabled && s.navItemTextDisabled]}>
                 {item.name}
               </Text>
-              {item.disabled && (
-                <View style={s.badge}>
-                  <Text style={s.badgeText}>Próximo</Text>
-                </View>
-              )}
+              {item.disabled && <Text style={s.badgeLabel}>Próximo</Text>}
             </TouchableOpacity>
           ))}
         </ScrollView>
 
-        {/* Pie */}
+        {/* Footer */}
         <View style={s.footer}>
-          <View style={s.themeRow}>
+          {/* Theme Toggle */}
+          <View style={s.themeToggle}>
             <Text style={s.themeIcon}>{mode === 'dark' ? '🌙' : '☀️'}</Text>
-            <Text style={s.themeLabel}>Modo {mode === 'dark' ? 'oscuro' : 'claro'}</Text>
+            <Text style={s.themeLabel}>Tema</Text>
             <Switch
               value={mode === 'dark'}
               onValueChange={toggleTheme}
@@ -139,10 +122,13 @@ export default function CustomDrawer({ visible, onClose }) {
               thumbColor={mode === 'dark' ? colors.accent : '#ccc'}
             />
           </View>
-          <View style={s.divider} />
-          <TouchableOpacity style={s.logoutBtn} onPress={handleLogout} activeOpacity={0.7}>
+
+          <View style={s.footerDivider} />
+
+          {/* Logout */}
+          <TouchableOpacity style={s.logoutButton} onPress={handleLogout} activeOpacity={0.7}>
             <Text style={s.logoutIcon}>🚪</Text>
-            <Text style={s.logoutText}>Cerrar sesión</Text>
+            <Text style={s.logoutLabel}>Cerrar sesión</Text>
           </TouchableOpacity>
         </View>
       </Animated.View>
@@ -158,105 +144,51 @@ const styles = (c) => StyleSheet.create({
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   drawer: {
     width: DRAWER_WIDTH,
     height: '100%',
-    backgroundColor: c.drawerBg,
+    backgroundColor: c.bg,
     shadowColor: '#000',
     shadowOffset: { width: 4, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 20,
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 16,
   },
+
+  // ── HEADER ──────────────────────────────────────────────────────────────
   header: {
-    backgroundColor: '#0d0d0d',
-    paddingTop: StatusBar.currentHeight ? StatusBar.currentHeight + 16 : 48,
-    paddingBottom: 20,
-    paddingHorizontal: 18,
-  },
-  logoRow: {
+    backgroundColor: c.bg,
+    paddingTop: StatusBar.currentHeight ? StatusBar.currentHeight + 8 : 32,
+    paddingBottom: 8,
+    paddingHorizontal: 16,
     flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
+    justifyContent: 'flex-end',
+    borderBottomWidth: 1,
+    borderBottomColor: c.border,
   },
-  chipSquareBig: {
-    width: 14,
-    height: 14,
-    backgroundColor: '#F5A623',
-    borderRadius: 3,
-    marginRight: 3,
-  },
-  chipSquaresCol: {
-    flexDirection: 'column',
-    gap: 2,
-    marginRight: 8,
-  },
-  chipSquareSmall: {
-    width: 6,
-    height: 6,
-    backgroundColor: '#555',
-    borderRadius: 1,
-  },
-  logoText: {
-    color: '#aaa',
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 2,
-  },
-  appName: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '800',
-    lineHeight: 23,
-    marginBottom: 14,
-  },
-  userChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#1a1a1a',
-    borderRadius: 12,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: '#2a2a2a',
-  },
-  avatar: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#F5A623',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  avatarText: {
-    color: '#000',
-    fontWeight: '800',
-    fontSize: 15,
-  },
-  userName: {
-    color: '#fff',
+  closeBtn: {
+    color: c.text,
+    fontSize: 24,
     fontWeight: '600',
-    fontSize: 13,
+    opacity: 0.7,
   },
-  userEmail: {
-    color: '#666',
-    fontSize: 11,
-  },
-  nav: {
+
+  // ── NAVIGATION ───────────────────────────────────────────────────────────
+  navScroll: {
     flex: 1,
-    paddingTop: 12,
-    paddingHorizontal: 12,
+    paddingTop: 8,
+    paddingHorizontal: 8,
   },
-  sectionLabel: {
+  navSection: {
     color: c.textMuted,
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
-    letterSpacing: 1.5,
-    marginLeft: 8,
+    letterSpacing: 1,
+    marginLeft: 12,
     marginBottom: 8,
-    marginTop: 4,
+    marginTop: 8,
   },
   navItem: {
     flexDirection: 'row',
@@ -264,81 +196,87 @@ const styles = (c) => StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 12,
     borderRadius: 10,
-    marginBottom: 2,
+    marginBottom: 4,
   },
   navItemActive: {
-    backgroundColor: c.accent + '20',
+    backgroundColor: c.accent + '15',
   },
   navItemDisabled: {
-    opacity: 0.45,
+    opacity: 0.5,
   },
-  navIcon: {
-    fontSize: 18,
-    marginRight: 12,
+  navItemIcon: {
+    fontSize: 20,
+    marginRight: 14,
     width: 24,
     textAlign: 'center',
   },
-  navLabel: {
+  navItemText: {
     color: c.textSec,
-    fontSize: 15,
+    fontSize: 14,
+    fontWeight: '500',
     flex: 1,
   },
-  navLabelActive: {
+  navItemTextActive: {
     color: c.accent,
     fontWeight: '700',
   },
-  navLabelDisabled: {
+  navItemTextDisabled: {
     color: c.textMuted,
   },
-  badge: {
-    backgroundColor: c.accent + '30',
-    borderRadius: 10,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-  },
-  badgeText: {
+  badgeLabel: {
     color: c.accent,
     fontSize: 9,
     fontWeight: '700',
+    backgroundColor: c.accent + '20',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
   },
+
+  // ── FOOTER ──────────────────────────────────────────────────────────────
   footer: {
-    paddingHorizontal: 16,
-    paddingBottom: 30,
-    paddingTop: 8,
+    paddingHorizontal: 12,
+    paddingBottom: 24,
+    paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: c.border,
   },
-  themeRow: {
+  themeToggle: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
   },
   themeIcon: {
     fontSize: 18,
-    marginRight: 10,
+    marginRight: 12,
   },
   themeLabel: {
     color: c.textSec,
-    fontSize: 14,
+    fontSize: 13,
+    fontWeight: '500',
     flex: 1,
   },
-  divider: {
+  footerDivider: {
     height: 1,
     backgroundColor: c.border,
-    marginVertical: 6,
+    marginVertical: 8,
   },
-  logoutBtn: {
+  logoutButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: '#e53e3e10',
   },
   logoutIcon: {
     fontSize: 18,
-    marginRight: 10,
+    marginRight: 12,
   },
-  logoutText: {
+  logoutLabel: {
     color: '#e53e3e',
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '600',
   },
 });
