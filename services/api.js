@@ -1,6 +1,16 @@
 import axios from 'axios';
+import Constants from 'expo-constants';
 
-const BASE_URL = process.env.EXPO_PUBLIC_API_URL;
+const envUrl = process.env.EXPO_PUBLIC_API_URL;
+const manifestUrl = Constants.manifest?.extra?.EXPO_PUBLIC_API_URL;
+const expoConfigUrl = Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL;
+const BASE_URL = envUrl || manifestUrl || expoConfigUrl || 'http://192.168.0.9:8000/api';
+
+if (!envUrl && !manifestUrl && !expoConfigUrl) {
+  console.warn('API URL no encontrada en variables de entorno, usando fallback:', BASE_URL);
+} else {
+  console.log('API URL configurada:', BASE_URL);
+}
 
 const api = axios.create({
   baseURL: BASE_URL,
@@ -26,8 +36,11 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response) {
+      // Error del servidor (4xx, 5xx) — preservar .response para que offlineQueue distinga
       const msg = error.response.data?.message || `Error ${error.response.status}`;
-      return Promise.reject(new Error(msg));
+      const serverError = new Error(msg);
+      serverError.response = error.response; // IMPORTANTE: preservar response
+      return Promise.reject(serverError);
     }
     if (error.code === 'ECONNABORTED') {
       return Promise.reject(new Error('Tiempo de espera agotado'));
