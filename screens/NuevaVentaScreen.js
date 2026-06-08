@@ -404,18 +404,27 @@ export default function NuevaVentaScreen({ navigation }) {
           stock_asignado: Number(p.cantidad_asignada ?? 0),
           stock_disponible: Math.max(0, stock_disponible),
           cantidad_vendida: Number(p.cantidad_vendida ?? 0),
-          categoria: null,
-          categoria_id: null,
+          categoria: p.categoria || null,
+          categoria_id: p.categoria_id || null,
           sucursal_id: asignacion.sucursal_id || sucursalId,
           imagen: p.imagen || null,
           asignacion_detalle_id: p.id || null,
         };
       });
 
+      // Extraer categorías únicas de los productos
+      const uniqueCategories = Array.from(new Map(
+        mapped
+          .filter(p => p.categoria_id && p.categoria)
+          .map(p => [p.categoria_id, { id: p.categoria_id, nombre: p.categoria }])
+      ).values());
+
       setAsignMsg('');
       console.log('=== PRODUCTOS DESPUÉS DEL MAPEO ===');
       console.log('Primer producto mapeado:', JSON.stringify(mapped[0], null, 2));
+      console.log('Categorías encontradas:', uniqueCategories);
       setProductos(mapped);
+      setCategorias(uniqueCategories);
     } catch (e) {
       const msg = e?.response?.data?.message || e?.message || String(e);
       const isOffline = !e.response || msg === 'Sin conexión con el servidor' || msg === 'Tiempo de espera agotado';
