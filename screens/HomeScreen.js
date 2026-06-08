@@ -11,6 +11,7 @@ import {
   RefreshControl,
   Modal,
   Alert,
+  Image,
 } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -287,8 +288,15 @@ export default function HomeScreen({ navigation }) {
           </View>
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={handleTitlePress} activeOpacity={0.7}>
-          <Text style={s.appBarTitle}>Dashboard</Text>
+        <TouchableOpacity onPress={handleTitlePress} activeOpacity={0.7} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Image
+            source={require('../assets/img/logo.png')}
+            style={{ width: 40, height: 40, resizeMode: 'contain' }}
+          />
+          <View>
+            <Text style={s.appBarTitle}>SIDB</Text>
+            <Text style={{ fontSize: 10, color: colors.textMuted, marginTop: -4 }}>Distribuidora</Text>
+          </View>
         </TouchableOpacity>
 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>

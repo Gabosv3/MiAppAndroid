@@ -1,14 +1,14 @@
 {
   "expo": {
-    "name": "MiAppAndroid",
-    "slug": "MiAppAndroid",
+    "name": "SIDB",
+    "slug": "sidb",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/img/logo.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/img/logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -17,19 +17,20 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/img/logo.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "package": "com.sidb.distribuidora"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/img/logo.png"
     },
     "plugins": [
       "expo-sqlite"
     ],
     "extra": {
-      "EXPO_PUBLIC_API_URL": "http://192.168.1.13:8000/api"
+      "EXPO_PUBLIC_API_URL": "https://panel.distribuidorabriancescomenjivar.com/api"
     }
   }
 }
