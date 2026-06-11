@@ -4,273 +4,245 @@ import {
   ScrollView, ActivityIndicator, Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { useTheme } from '../context/ThemeContext';
 import api from '../services/api';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
-
-const getInitials = (name = '') => name.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase();
+const initials = (name='') => name.trim().split(/\s+/).slice(0,2).map(w=>w[0]?.toUpperCase()||'').join('');
 
 export default function DetalleClienteScreen({ navigation, route }) {
   const { clienteId, clienteNombre } = route.params;
-  const { colors } = useTheme();
-  const [data, setData] = useState(null);
+  const [data,    setData]    = useState(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error,   setError]   = useState('');
 
   const cargar = useCallback(async () => {
     try {
       setError('');
       const res = await api.get(`/cobros/clientes/${clienteId}`);
       setData(res.data);
-    } catch (e) {
-      setError(e?.message || 'Error cargando cliente');
-    } finally {
-      setLoading(false);
-    }
+    } catch(e) { setError(e?.message||'Error'); }
+    finally { setLoading(false); }
   }, [clienteId]);
 
-  useFocusEffect(useCallback(() => {
-    setLoading(true);
-    cargar();
-  }, [cargar]));
+  useFocusEffect(useCallback(()=>{ setLoading(true); cargar(); },[cargar]));
 
-  const s = styles(colors);
   const cliente = data?.cliente;
   const resumen = data?.resumen;
-  const ventas = data?.ventas || [];
+  const ventas  = data?.ventas||[];
 
   return (
     <View style={s.root}>
-      <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
+      <StatusBar barStyle="light-content" backgroundColor="#1565C0"/>
 
-      {/* Header */}
       <View style={s.header}>
-        <View style={s.headerRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Text style={s.backIcon}>←</Text>
-          </TouchableOpacity>
-          <Text style={s.headerTitle} numberOfLines={1}>Detalle del cliente</Text>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            {cliente?.telefono && (
-              <TouchableOpacity style={s.headerAction} onPress={() => Linking.openURL(`tel:${cliente.telefono}`)}>
-                <Text style={{ fontSize: 16 }}>📞</Text>
-              </TouchableOpacity>
-            )}
-            {cliente?.whatsapp && (
-              <TouchableOpacity style={s.headerAction} onPress={() => Linking.openURL(`https://wa.me/503${cliente.whatsapp}`)}>
-                <Text style={{ fontSize: 16 }}>💬</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
+        <TouchableOpacity onPress={()=>navigation.goBack()} style={s.backBtn} hitSlop={{top:10,bottom:10,left:10,right:10}}>
+          <Text style={s.backArrow}>←</Text>
+        </TouchableOpacity>
+        <Text style={s.headerTitle} numberOfLines={1}>Detalle del cliente</Text>
+        {cliente?.whatsapp
+          ? <TouchableOpacity style={s.waBubble} onPress={()=>Linking.openURL(`https://wa.me/503${cliente.whatsapp}`)}>
+              <Text style={{fontSize:18}}>💬</Text>
+            </TouchableOpacity>
+          : <View style={{width:40}}/>
+        }
       </View>
 
-      {loading ? (
-        <View style={s.centered}><ActivityIndicator color="#1565C0" size="large" /><Text style={{ color: colors.textMuted, marginTop: 12 }}>Cargando...</Text></View>
-      ) : error ? (
-        <View style={s.centered}>
-          <Text style={{ fontSize: 36, marginBottom: 10 }}>😕</Text>
-          <Text style={{ color: colors.text, fontWeight: '700' }}>{error}</Text>
-          <TouchableOpacity style={s.retryBtn} onPress={() => { setLoading(true); cargar(); }}>
-            <Text style={s.retryTxt}>Reintentar</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <ScrollView showsVerticalScrollIndicator={false}>
-          {/* Hero card cliente */}
-          <View style={s.heroCard}>
-            <View style={s.heroAvatar}>
-              <Text style={s.heroAvatarTxt}>{getInitials(cliente?.nombre)}</Text>
-            </View>
-            <View style={{ flex: 1, marginLeft: 14 }}>
-              <Text style={s.heroNombre}>{cliente?.nombre}</Text>
-              {cliente?.dui ? <Text style={s.heroInfo}>🪪 DUI: {cliente.dui}</Text> : null}
-              {cliente?.telefono ? <Text style={s.heroInfo}>📞 {cliente.telefono}</Text> : null}
-              {cliente?.direccion ? <Text style={s.heroInfo}>📍 {cliente.direccion}</Text> : null}
-              {cliente?.ruta ? <Text style={s.heroInfo}>🗺️ {cliente.ruta}</Text> : null}
-            </View>
-            <View style={s.saldoBadge}>
-              <Text style={s.saldoLabel}>SALDO</Text>
-              <Text style={s.saldoVal}>{fmt(cliente?.saldo_total)}</Text>
-            </View>
-          </View>
-
-          {/* Resumen stats */}
-          <View style={s.statsGrid}>
-            <View style={[s.statsCard, { borderLeftColor: '#1565C0' }]}>
-              <Text style={s.statsIcon}>🛍️</Text>
-              <Text style={[s.statsVal, { color: '#1565C0' }]}>{resumen?.total_ventas}</Text>
-              <Text style={s.statsLabel}>Ventas activas</Text>
-            </View>
-            <View style={[s.statsCard, { borderLeftColor: '#F5A623' }]}>
-              <Text style={s.statsIcon}>⏳</Text>
-              <Text style={[s.statsVal, { color: '#F5A623' }]}>{resumen?.cuotas_pendientes}</Text>
-              <Text style={s.statsLabel}>Cuotas pendientes</Text>
-            </View>
-            <View style={[s.statsCard, { borderLeftColor: '#e53e3e' }]}>
-              <Text style={s.statsIcon}>⚠️</Text>
-              <Text style={[s.statsVal, { color: '#e53e3e' }]}>{resumen?.cuotas_vencidas}</Text>
-              <Text style={s.statsLabel}>Cuotas vencidas</Text>
-            </View>
-          </View>
-
-          {/* Ventas activas */}
-          <View style={s.sectionHeader}>
-            <Text style={s.sectionTitle}>Ventas activas</Text>
-            <Text style={s.sectionCount}>{ventas.length}</Text>
-          </View>
-
-          {ventas.map(venta => (
-            <View key={venta.id} style={s.ventaCard}>
-              {/* Venta header */}
-              <View style={s.ventaTop}>
-                <View style={s.ventaIconWrap}>
-                  <Text style={{ fontSize: 18 }}>📋</Text>
-                </View>
-                <View style={{ flex: 1, marginLeft: 10 }}>
-                  <Text style={s.ventaNum}>{venta.numero_venta}</Text>
-                  <Text style={s.ventaFecha}>Fecha: {venta.fecha_venta}</Text>
-                </View>
-                <View style={[s.estadoBadge, venta.estado === 'activa' && s.estadoActiva]}>
-                  <Text style={[s.estadoTxt, venta.estado === 'activa' && { color: '#2e7d32' }]}>{venta.estado}</Text>
-                </View>
-              </View>
-
-              {/* Progress bar */}
-              <View style={s.progressWrap}>
-                <View style={s.progressBg}>
-                  <View style={[s.progressFill, {
-                    width: `${Math.min(100, (venta.monto_pagado / venta.total) * 100)}%`
-                  }]} />
-                </View>
-                <Text style={s.progressTxt}>{Math.round((venta.monto_pagado / venta.total) * 100)}%</Text>
-              </View>
-
-              {/* Montos */}
-              <View style={s.montosRow}>
-                <View style={s.montoBox}>
-                  <Text style={s.montoLabel}>Total</Text>
-                  <Text style={[s.montoVal, { color: '#1565C0' }]}>{fmt(venta.total)}</Text>
-                </View>
-                <View style={s.montoBox}>
-                  <Text style={s.montoLabel}>Pagado</Text>
-                  <Text style={[s.montoVal, { color: '#2e7d32' }]}>{fmt(venta.monto_pagado)}</Text>
-                </View>
-                <View style={s.montoBox}>
-                  <Text style={s.montoLabel}>Pendiente</Text>
-                  <Text style={[s.montoVal, { color: '#F5A623' }]}>{fmt(venta.saldo_pendiente)}</Text>
-                </View>
-              </View>
-
-              {/* Badges cuotas */}
-              <View style={s.cuotasBadges}>
-                <View style={s.infoPill}>
-                  <Text style={s.infoPillTxt}>🪙 {venta.resumen?.total_cuotas} cuotas</Text>
-                </View>
-                {venta.resumen?.pendientes > 0 && (
-                  <View style={[s.infoPill, { backgroundColor: '#fff8e1' }]}>
-                    <Text style={[s.infoPillTxt, { color: '#f57f17' }]}>⏳ {venta.resumen.pendientes} pend.</Text>
-                  </View>
-                )}
-                {venta.resumen?.vencidas > 0 && (
-                  <View style={[s.infoPill, { backgroundColor: '#fce4ec' }]}>
-                    <Text style={[s.infoPillTxt, { color: '#c62828' }]}>⚠️ {venta.resumen.vencidas} venc.</Text>
-                  </View>
-                )}
-              </View>
-
-              <TouchableOpacity
-                style={s.cobrarVentaBtn}
-                onPress={() => navigation.navigate('RegistrarPago', {
-                  cliente: { id: clienteId, nombre: cliente?.nombre, ...cliente },
-                  ventaId: venta.id,
-                  ventaNumero: venta.numero_venta,
-                  saldoPendiente: venta.saldo_pendiente,
-                  cuotasVencidas: venta.resumen?.vencidas || 0,
-                })}
-              >
-                <Text style={s.cobrarVentaTxt}>💰 Cobrar esta venta</Text>
+      {loading
+        ? <View style={s.centered}><ActivityIndicator size="large" color="#1565C0"/><Text style={{color:'#888',marginTop:12}}>Cargando...</Text></View>
+        : error
+          ? <View style={s.centered}>
+              <Text style={{fontSize:40,marginBottom:10}}>😕</Text>
+              <Text style={{color:'#333',fontWeight:'700',marginBottom:16}}>{error}</Text>
+              <TouchableOpacity style={s.retryBtn} onPress={()=>{setLoading(true);cargar();}}>
+                <Text style={s.retryTxt}>Reintentar</Text>
               </TouchableOpacity>
             </View>
-          ))}
+          : (
+        <ScrollView showsVerticalScrollIndicator={false}>
 
-          {/* Gestiones pendientes link */}
-          <TouchableOpacity style={s.gestionesCard}>
-            <View style={s.gestionesLeft}>
-              <Text style={{ fontSize: 20 }}>📋</Text>
-              <Text style={s.gestionesTxt}>Ver gestiones pendientes</Text>
+          {/* ── Cliente card ── */}
+          <View style={s.clienteCard}>
+            <View style={s.clienteRow}>
+              <View style={s.clienteAvatar}>
+                <Text style={s.clienteAvatarTxt}>{initials(cliente?.nombre)}</Text>
+              </View>
+              <View style={{flex:1,marginLeft:14}}>
+                <Text style={s.clienteNombre}>{cliente?.nombre}</Text>
+                {cliente?.dui       && <Text style={s.clienteInfo}>DUI:       {cliente.dui}</Text>}
+                {cliente?.telefono  && <Text style={s.clienteInfo}>Tel:       {cliente.telefono}</Text>}
+                {cliente?.direccion && <Text style={s.clienteInfo}>Dirección: {cliente.direccion}</Text>}
+                {cliente?.ruta      && <Text style={s.clienteInfo}>Ruta:      {cliente.ruta}</Text>}
+              </View>
+              <View style={s.saldoBox}>
+                <Text style={s.saldoLabel}>Saldo total</Text>
+                <Text style={s.saldoVal}>{fmt(cliente?.saldo_total)}</Text>
+              </View>
             </View>
-            <Text style={{ color: '#1565C0', fontSize: 20 }}>›</Text>
+          </View>
+
+          {/* ── Resumen stats ── */}
+          <View style={s.statsRow}>
+            <View style={s.statCard}>
+              <Text style={s.statIcon}>🛍️</Text>
+              <Text style={s.statLabel}>Total ventas</Text>
+              <Text style={[s.statVal,{color:'#1565C0'}]}>{resumen?.total_ventas}</Text>
+            </View>
+            <View style={s.statCard}>
+              <Text style={s.statIcon}>⏳</Text>
+              <Text style={s.statLabel}>Cuotas pendientes</Text>
+              <Text style={[s.statVal,{color:'#F5A623'}]}>{resumen?.cuotas_pendientes}</Text>
+            </View>
+            <View style={s.statCard}>
+              <Text style={s.statIcon}>⚠️</Text>
+              <Text style={s.statLabel}>Cuotas vencidas</Text>
+              <Text style={[s.statVal,{color:'#e53e3e'}]}>{resumen?.cuotas_vencidas}</Text>
+            </View>
+          </View>
+
+          {/* ── Ventas ── */}
+          <Text style={s.sectionTitle}>Ventas activas</Text>
+
+          {ventas.map(venta => {
+            const pct = venta.total > 0 ? Math.round((venta.monto_pagado/venta.total)*100) : 0;
+            return (
+              <View key={venta.id} style={s.ventaCard}>
+                {/* Venta header */}
+                <View style={s.ventaHeader}>
+                  <View style={s.ventaIconBox}>
+                    <Text style={{fontSize:20}}>📋</Text>
+                  </View>
+                  <View style={{flex:1,marginLeft:12}}>
+                    <Text style={s.ventaNum}>{venta.numero_venta}</Text>
+                    <Text style={s.ventaFecha}>Fecha: {venta.fecha_venta}</Text>
+                  </View>
+                </View>
+
+                {/* Montos */}
+                <View style={s.montosRow}>
+                  <View style={s.montoItem}>
+                    <Text style={s.montoLabel}>Total</Text>
+                    <Text style={[s.montoVal,{color:'#1565C0'}]}>{fmt(venta.total)}</Text>
+                  </View>
+                  <View style={s.montoItem}>
+                    <Text style={s.montoLabel}>Pagado</Text>
+                    <Text style={[s.montoVal,{color:'#2e7d32'}]}>{fmt(venta.monto_pagado)}</Text>
+                  </View>
+                  <View style={s.montoItem}>
+                    <Text style={s.montoLabel}>Pendiente</Text>
+                    <Text style={[s.montoVal,{color:'#F5A623'}]}>{fmt(venta.saldo_pendiente)}</Text>
+                  </View>
+                </View>
+
+                {/* Badges */}
+                <View style={s.ventaBadges}>
+                  {(venta.resumen?.pendientes||0)>0 &&
+                    <View style={[s.pill,{backgroundColor:'#fff8e1'}]}>
+                      <Text style={[s.pillTxt,{color:'#f57f17'}]}>⏳ {venta.resumen.pendientes} pendientes</Text>
+                    </View>
+                  }
+                  {(venta.resumen?.vencidas||0)>0 &&
+                    <View style={[s.pill,{backgroundColor:'#fce4ec'}]}>
+                      <Text style={[s.pillTxt,{color:'#c62828'}]}>⚠️ {venta.resumen.vencidas} vencidas</Text>
+                    </View>
+                  }
+                </View>
+
+                {/* Cuotas info */}
+                <View style={s.cuotasInfo}>
+                  <Text style={s.cuotasInfoTxt}>
+                    🪙 {venta.resumen?.total_cuotas} cuotas · Estado: <Text style={{color:'#2e7d32',fontWeight:'700'}}>{venta.estado}</Text>
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={s.cobrarBtn}
+                  onPress={() => navigation.navigate('RegistrarPago',{
+                    cliente: {id:clienteId, nombre:cliente?.nombre, ...cliente},
+                    ventaId: venta.id,
+                    ventaNumero: venta.numero_venta,
+                    saldoPendiente: venta.saldo_pendiente,
+                    cuotasVencidas: venta.resumen?.vencidas||0,
+                  })}
+                >
+                  <Text style={s.cobrarBtnTxt}>Cobrar esta venta</Text>
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+
+          {/* ── Gestiones ── */}
+          <TouchableOpacity style={s.gestionesRow}>
+            <Text style={{fontSize:20}}>📋</Text>
+            <Text style={s.gestionesTxt}>Ver gestiones pendientes</Text>
+            <Text style={{fontSize:20,color:'#1565C0'}}>›</Text>
           </TouchableOpacity>
 
-          <View style={{ height: 32 }} />
+          <View style={{height:32}}/>
         </ScrollView>
       )}
     </View>
   );
 }
 
-const styles = (c) => StyleSheet.create({
-  root: { flex: 1, backgroundColor: c.bg },
-  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+const s = StyleSheet.create({
+  root:   { flex:1, backgroundColor:'#f5f6fa' },
+  centered:{ flex:1, alignItems:'center', justifyContent:'center', padding:24 },
   header: {
-    backgroundColor: '#1565C0',
-    paddingTop: StatusBar.currentHeight ? StatusBar.currentHeight + 6 : 44,
-    paddingBottom: 14, paddingHorizontal: 16,
+    backgroundColor:'#1565C0', flexDirection:'row', alignItems:'center',
+    paddingTop:(StatusBar.currentHeight||0)+8, paddingBottom:16, paddingHorizontal:16,
   },
-  headerRow: { flexDirection: 'row', alignItems: 'center' },
-  backBtn: { marginRight: 12 },
-  backIcon: { color: '#fff', fontSize: 22 },
-  headerTitle: { color: '#fff', fontSize: 17, fontWeight: '700', flex: 1 },
-  headerAction: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
-  retryBtn: { marginTop: 14, backgroundColor: '#1565C0', borderRadius: 10, paddingHorizontal: 28, paddingVertical: 12 },
-  retryTxt: { color: '#fff', fontWeight: '700' },
-  heroCard: {
-    flexDirection: 'row', alignItems: 'flex-start',
-    backgroundColor: c.card, margin: 12, borderRadius: 14, padding: 16, elevation: 3,
+  backBtn:   { marginRight:12 },
+  backArrow: { color:'#fff', fontSize:24 },
+  headerTitle:{ color:'#fff', fontSize:18, fontWeight:'700', flex:1 },
+  waBubble:  { width:40,height:40, borderRadius:20, backgroundColor:'rgba(255,255,255,0.15)', alignItems:'center', justifyContent:'center' },
+  retryBtn:  { backgroundColor:'#1565C0', borderRadius:10, paddingHorizontal:28, paddingVertical:12 },
+  retryTxt:  { color:'#fff', fontWeight:'700' },
+
+  clienteCard: {
+    backgroundColor:'#fff', margin:12, borderRadius:16, padding:16,
+    elevation:3, shadowColor:'#000', shadowOffset:{width:0,height:2}, shadowOpacity:0.08,
   },
-  heroAvatar: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#1565C0', alignItems: 'center', justifyContent: 'center' },
-  heroAvatarTxt: { color: '#fff', fontSize: 18, fontWeight: '800' },
-  heroNombre: { color: c.text, fontSize: 16, fontWeight: '800', marginBottom: 5 },
-  heroInfo: { color: c.textMuted, fontSize: 12, marginBottom: 2 },
-  saldoBadge: { alignItems: 'flex-end' },
-  saldoLabel: { color: c.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1 },
-  saldoVal: { color: '#e53e3e', fontSize: 18, fontWeight: '800' },
-  statsGrid: { flexDirection: 'row', marginHorizontal: 12, gap: 8, marginBottom: 4 },
-  statsCard: { flex: 1, backgroundColor: c.card, borderRadius: 10, padding: 12, alignItems: 'center', borderLeftWidth: 3, elevation: 1 },
-  statsIcon: { fontSize: 18, marginBottom: 4 },
-  statsVal: { fontSize: 20, fontWeight: '800' },
-  statsLabel: { color: c.textMuted, fontSize: 10, textAlign: 'center', marginTop: 2 },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 },
-  sectionTitle: { color: c.text, fontSize: 15, fontWeight: '700', flex: 1 },
-  sectionCount: { backgroundColor: '#1565C0', color: '#fff', fontSize: 12, fontWeight: '700', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
-  ventaCard: { backgroundColor: c.card, marginHorizontal: 12, marginBottom: 10, borderRadius: 14, padding: 14, elevation: 2 },
-  ventaTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  ventaIconWrap: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#e3f2fd', alignItems: 'center', justifyContent: 'center' },
-  ventaNum: { color: c.text, fontSize: 14, fontWeight: '800' },
-  ventaFecha: { color: c.textMuted, fontSize: 11, marginTop: 1 },
-  estadoBadge: { backgroundColor: '#f5f5f5', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
-  estadoActiva: { backgroundColor: '#e8f5e9' },
-  estadoTxt: { fontSize: 12, fontWeight: '700', color: c.textMuted },
-  progressWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-  progressBg: { flex: 1, height: 6, backgroundColor: c.border, borderRadius: 3, overflow: 'hidden' },
-  progressFill: { height: '100%', backgroundColor: '#1565C0', borderRadius: 3 },
-  progressTxt: { color: c.textMuted, fontSize: 11, fontWeight: '700', width: 32 },
-  montosRow: { flexDirection: 'row', backgroundColor: c.surfaceAlt || '#f8f9fa', borderRadius: 10, padding: 10, marginBottom: 10 },
-  montoBox: { flex: 1, alignItems: 'center' },
-  montoLabel: { color: c.textMuted, fontSize: 10, fontWeight: '600', marginBottom: 3 },
-  montoVal: { fontSize: 13, fontWeight: '800' },
-  cuotasBadges: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 },
-  infoPill: { backgroundColor: '#e3f2fd', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
-  infoPillTxt: { color: '#1565C0', fontSize: 11, fontWeight: '600' },
-  cobrarVentaBtn: { backgroundColor: '#1565C0', borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
-  cobrarVentaTxt: { color: '#fff', fontWeight: '800', fontSize: 14 },
-  gestionesCard: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: c.card, marginHorizontal: 12, marginTop: 4,
-    borderRadius: 14, padding: 16, elevation: 1,
+  clienteRow:      { flexDirection:'row', alignItems:'flex-start' },
+  clienteAvatar:   { width:50,height:50, borderRadius:25, backgroundColor:'#ffcdd2', alignItems:'center', justifyContent:'center' },
+  clienteAvatarTxt:{ color:'#c62828', fontSize:18, fontWeight:'800' },
+  clienteNombre:   { color:'#1a1a1a', fontSize:16, fontWeight:'800', marginBottom:6 },
+  clienteInfo:     { color:'#666', fontSize:12, marginBottom:2 },
+  saldoBox:        { alignItems:'flex-end' },
+  saldoLabel:      { color:'#999', fontSize:10, fontWeight:'600', marginBottom:2 },
+  saldoVal:        { color:'#e53e3e', fontSize:20, fontWeight:'900' },
+
+  statsRow:  { flexDirection:'row', marginHorizontal:12, gap:8, marginBottom:4 },
+  statCard:  { flex:1, backgroundColor:'#fff', borderRadius:12, padding:12, alignItems:'center', elevation:2, shadowColor:'#000', shadowOffset:{width:0,height:1}, shadowOpacity:0.06 },
+  statIcon:  { fontSize:22, marginBottom:4 },
+  statLabel: { color:'#999', fontSize:10, textAlign:'center', marginBottom:4 },
+  statVal:   { fontSize:20, fontWeight:'800' },
+
+  sectionTitle:{ color:'#1a1a1a', fontSize:15, fontWeight:'800', marginHorizontal:16, marginTop:16, marginBottom:8 },
+
+  ventaCard: {
+    backgroundColor:'#fff', marginHorizontal:12, marginBottom:10, borderRadius:16, padding:16,
+    elevation:3, shadowColor:'#000', shadowOffset:{width:0,height:2}, shadowOpacity:0.08,
   },
-  gestionesLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  gestionesTxt: { color: '#1565C0', fontWeight: '700', fontSize: 14 },
+  ventaHeader:  { flexDirection:'row', alignItems:'center', marginBottom:14 },
+  ventaIconBox: { width:42,height:42, borderRadius:21, backgroundColor:'#e3f2fd', alignItems:'center', justifyContent:'center' },
+  ventaNum:     { color:'#1a1a1a', fontSize:15, fontWeight:'800' },
+  ventaFecha:   { color:'#999', fontSize:12, marginTop:2 },
+  montosRow:    { flexDirection:'row', backgroundColor:'#f8f9fc', borderRadius:10, padding:10, marginBottom:12 },
+  montoItem:    { flex:1, alignItems:'center' },
+  montoLabel:   { color:'#999', fontSize:10, fontWeight:'600', marginBottom:3 },
+  montoVal:     { fontSize:14, fontWeight:'800' },
+  ventaBadges:  { flexDirection:'row', gap:8, marginBottom:10, flexWrap:'wrap' },
+  pill:         { borderRadius:12, paddingHorizontal:12, paddingVertical:5 },
+  pillTxt:      { fontSize:12, fontWeight:'600' },
+  cuotasInfo:   { backgroundColor:'#f5f6fa', borderRadius:8, padding:10, marginBottom:12 },
+  cuotasInfoTxt:{ color:'#666', fontSize:12 },
+  cobrarBtn:    { backgroundColor:'#1565C0', borderRadius:10, paddingVertical:13, alignItems:'center' },
+  cobrarBtnTxt: { color:'#fff', fontWeight:'800', fontSize:14 },
+
+  gestionesRow: {
+    flexDirection:'row', alignItems:'center', gap:12,
+    backgroundColor:'#fff', marginHorizontal:12, marginTop:4, borderRadius:14, padding:16,
+    elevation:2,
+  },
+  gestionesTxt: { flex:1, color:'#1565C0', fontWeight:'700', fontSize:14 },
 });
