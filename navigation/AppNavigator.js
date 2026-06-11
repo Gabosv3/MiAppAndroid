@@ -5,6 +5,10 @@ import LoginScreen from '../screens/LoginScreen';
 import HomeScreen from '../screens/HomeScreen';
 import NuevaVentaScreen from '../screens/NuevaVentaScreen';
 import CrearClienteScreen from '../screens/CrearClienteScreen';
+import CobrosScreen from '../screens/CobrosScreen';
+import DetalleClienteScreen from '../screens/DetalleClienteScreen';
+import RegistrarPagoScreen from '../screens/RegistrarPagoScreen';
+import PagoRegistradoScreen from '../screens/PagoRegistradoScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -23,9 +27,13 @@ export default function AppNavigator() {
     <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
       {user ? (
         <>
-          <Stack.Screen name="Home"           component={HomeScreen} />
-          <Stack.Screen name="CrearCliente" component={CrearClienteScreen} options={{ animation: 'slide_from_right' }} />
-          <Stack.Screen name="NuevaVenta"      component={NuevaVentaScreen} options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="Home"            component={HomeScreen} />
+          <Stack.Screen name="CrearCliente"    component={CrearClienteScreen}    options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="NuevaVenta"      component={NuevaVentaScreen}      options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="Cobros"          component={CobrosScreen}          options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="DetalleCliente"  component={DetalleClienteScreen}  options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="RegistrarPago"   component={RegistrarPagoScreen}   options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="PagoRegistrado"  component={PagoRegistradoScreen}  options={{ animation: 'fade' }} />
         </>
       ) : (
         <Stack.Screen name="Login" component={LoginScreen} />

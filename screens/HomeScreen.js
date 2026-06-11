@@ -475,6 +475,20 @@ export default function HomeScreen({ navigation }) {
           <Text style={{ color: '#fff', fontSize: 18 }}>→</Text>
         </TouchableOpacity>
 
+        {/* Cobros - acceso rápido */}
+        <TouchableOpacity
+          style={[s.posBtn, { backgroundColor: '#1565C0', marginTop: 8 }]}
+          onPress={() => navigation.navigate('Cobros')}
+          activeOpacity={0.85}
+        >
+          <Text style={s.posIcon}>💰</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={s.posLabel}>Cobros del día</Text>
+            <Text style={s.posDesc}>Rutas · Registrar pagos</Text>
+          </View>
+          <Text style={{ color: '#fff', fontSize: 18 }}>→</Text>
+        </TouchableOpacity>
+
         <Text style={s.sectionTitle}>Acciones rápidas</Text>
         <View style={s.actionGrid}>
           <TouchableOpacity
