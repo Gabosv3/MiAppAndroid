@@ -99,8 +99,14 @@ export function AuthProvider({ children }) {
       setUser(userData);
       await saveAuthData({ user: userData, token: t, email, password });
     } catch (e) {
-      const offlineError = !e.response || e.message === 'Sin conexión con el servidor' || e.message === 'Tiempo de espera agotado';
-      if (offlineError) {
+      // Solo fallback a offline si es error de RED, no error de credenciales del servidor
+      const isNetworkError = !e.response ||
+        e.message?.includes('Sin conexión') ||
+        e.message?.includes('Timeout');
+
+      const isServerCredentialError = e.response?.status === 401 || e.response?.status === 422;
+
+      if (isNetworkError && !isServerCredentialError) {
         try {
           await attemptOfflineLogin(email, password);
           return;
