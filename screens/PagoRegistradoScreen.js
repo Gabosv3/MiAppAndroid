@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView, Linking, Alert } from 'react-native';
 
 const fmt = (n) => `$${Number(n||0).toFixed(2)}`;
 
@@ -9,8 +9,55 @@ const CFG = {
   pendiente:             { label:'Pendiente',color:'#1565C0', bg:'#e3f2fd', icon:'🕐' },
 };
 
+const enviarWhatsApp = async ({ clienteNombre, clienteWhatsapp, montoTotal, metodoPago, ventaNumero, resultado }) => {
+  const cuotas  = resultado?.cuotas_pagadas || [];
+  const proxima = resultado?.proxima_cuota;
+  const fecha   = new Date().toLocaleDateString('es-SV');
+
+  const lineasCuotas = cuotas.map(c => {
+    const estado = c.estado === 'cobrado' ? '✅' : c.estado === 'parcialmente_cobrado' ? '⏳' : '○';
+    return `  ${estado} ${c.cuota}: ${fmt(c.monto_aplicado)}`;
+  }).join('\n');
+
+  const proximaTxt = proxima
+    ? `\n📅 *Próxima cuota:* ${proxima.cuota} | ${fmt(proxima.saldo_pendiente)} | Vence: ${proxima.fecha_vencimiento}`
+    : '';
+
+  const mensaje =
+`🏪 *DISTRIBUIDORA BM*
+📋 *RECIBO DE COBRO*
+━━━━━━━━━━━━━━━━━━━━
+📅 Fecha: ${fecha}
+👤 Cliente: ${clienteNombre}
+🔖 Venta: ${ventaNumero || 'N/A'}
+💳 Método: ${metodoPago}
+
+💰 *Total recibido: ${fmt(montoTotal)}*
+
+📌 Cuotas aplicadas:
+${lineasCuotas}
+${proximaTxt}
+━━━━━━━━━━━━━━━━━━━━
+¡Gracias por su pago! 🙏`;
+
+  const telefono = (clienteWhatsapp || '').replace(/\D/g, '');
+  if (!telefono) {
+    Alert.alert('Sin teléfono', 'El cliente no tiene número de WhatsApp registrado.');
+    return;
+  }
+  // El número de El Salvador empieza con 503
+  const numero = telefono.startsWith('503') ? telefono : `503${telefono}`;
+  const url = `https://wa.me/${numero}?text=${encodeURIComponent(mensaje)}`;
+  const puede = await Linking.canOpenURL(url);
+  if (puede) {
+    await Linking.openURL(url);
+  } else {
+    Alert.alert('WhatsApp no disponible', 'No se encontró WhatsApp instalado en este dispositivo.');
+  }
+};
+
 export default function PagoRegistradoScreen({ navigation, route }) {
-  const { resultado, clienteId, clienteNombre } = route.params;
+  const { resultado, clienteId, clienteNombre, clienteWhatsapp, montoTotal, metodoPago, ventaNumero } = route.params;
   const cuotas   = resultado?.cuotas_pagadas || [];
   const proxima  = resultado?.proxima_cuota;
   const cobradas = cuotas.filter(c => c.estado === 'cobrado').length;
@@ -93,6 +140,14 @@ export default function PagoRegistradoScreen({ navigation, route }) {
 
         {/* ── Botones ── */}
         <View style={s.btns}>
+          {clienteWhatsapp ? (
+            <TouchableOpacity
+              style={s.btnWhatsapp}
+              onPress={() => enviarWhatsApp({ clienteNombre, clienteWhatsapp, montoTotal, metodoPago, ventaNumero, resultado })}
+            >
+              <Text style={s.btnWhatsappTxt}>💬  Enviar recibo por WhatsApp</Text>
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity style={s.btnPrimary} onPress={()=>navigation.navigate('Cobros')}>
             <Text style={s.btnPrimaryTxt}>Volver a ruta</Text>
           </TouchableOpacity>
@@ -157,6 +212,8 @@ const s = StyleSheet.create({
   proximaVal:     { color:'#1a1a1a', fontSize:13, fontWeight:'600' },
 
   btns:          { marginHorizontal:12, marginTop:16, gap:10 },
+  btnWhatsapp:   { backgroundColor:'#25D366', borderRadius:12, paddingVertical:16, alignItems:'center', elevation:2 },
+  btnWhatsappTxt:{ color:'#fff', fontWeight:'800', fontSize:15 },
   btnPrimary:    { backgroundColor:'#1565C0', borderRadius:12, paddingVertical:16, alignItems:'center', elevation:2 },
   btnPrimaryTxt: { color:'#fff', fontWeight:'800', fontSize:15 },
   btnSecondary:  { borderWidth:1.5, borderColor:'#1565C0', borderRadius:12, paddingVertical:16, alignItems:'center' },

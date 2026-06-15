@@ -140,26 +140,31 @@ export default function CrearClienteScreen({ navigation }) {
           setDuiFrente(imageFile);
           setFrenteError('');
 
-          // Intentar extraer datos del DUI del frente automáticamente
+          // Escanear DUI con ML Kit
           try {
-            Alert.alert('⏳', 'Escaneando datos del DUI...');
-            const extractedData = await extractTextFromImage(asset.uri);
-
-            if (extractedData) {
-              if (extractedData.dui && !dui) {
-                handleDuiChange(extractedData.dui);
-                Alert.alert('✅ DUI detectado', extractedData.dui);
+            const datos = await extractTextFromImage(asset.uri);
+            if (datos) {
+              const campos = [];
+              if (datos.dui && !dui) {
+                handleDuiChange(datos.dui);
+                campos.push(`DUI: ${datos.dui}`);
               }
-              if (extractedData.nombre && !nombre) {
-                handleNombreChange(extractedData.nombre);
+              if (datos.nombre && !nombre) {
+                handleNombreChange(datos.nombre);
+                campos.push(`Nombre: ${datos.nombre}`);
               }
-              if (extractedData.apellido && !apellido) {
-                handleApellidoChange(extractedData.apellido);
+              if (datos.apellido && !apellido) {
+                handleApellidoChange(datos.apellido);
+                campos.push(`Apellido: ${datos.apellido}`);
+              }
+              if (campos.length > 0) {
+                Alert.alert('✅ Datos detectados', campos.join('\n'));
+              } else {
+                Alert.alert('⚠️ Sin datos', 'No se detectaron datos. Asegúrate de enfocar bien el frente del DUI.');
               }
             }
           } catch (ocrError) {
-            console.warn('OCR no disponible:', ocrError.message);
-            // Continuar sin OCR
+            console.warn('OCR error:', ocrError.message);
           }
         } else {
           setDuiReverso(imageFile);

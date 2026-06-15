@@ -5,6 +5,8 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import api from '../services/api';
+import { useConnectivity } from '../services/connectivity';
+import { guardarClienteCache, leerClienteCache } from '../services/cobrosOffline';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 const initials = (name='') => name.trim().split(/\s+/).slice(0,2).map(w=>w[0]?.toUpperCase()||'').join('');
@@ -14,15 +16,29 @@ export default function DetalleClienteScreen({ navigation, route }) {
   const [data,    setData]    = useState(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState('');
+  const [esCache, setEsCache] = useState(false);
+  const { isOnline } = useConnectivity();
 
   const cargar = useCallback(async () => {
     try {
       setError('');
-      const res = await api.get(`/cobros/clientes/${clienteId}`);
-      setData(res.data);
-    } catch(e) { setError(e?.message||'Error'); }
+      if (isOnline) {
+        const res = await api.get(`/cobros/clientes/${clienteId}`);
+        await guardarClienteCache(clienteId, res.data);
+        setData(res.data);
+        setEsCache(false);
+      } else {
+        const cache = await leerClienteCache(clienteId);
+        if (cache) { setData(cache.data); setEsCache(true); }
+        else setError('Sin conexión y no hay datos guardados para este cliente.');
+      }
+    } catch(e) {
+      const cache = await leerClienteCache(clienteId);
+      if (cache) { setData(cache.data); setEsCache(true); }
+      else setError(e?.message||'Error');
+    }
     finally { setLoading(false); }
-  }, [clienteId]);
+  }, [clienteId, isOnline]);
 
   useFocusEffect(useCallback(()=>{ setLoading(true); cargar(); },[cargar]));
 
@@ -59,6 +75,15 @@ export default function DetalleClienteScreen({ navigation, route }) {
             </View>
           : (
         <ScrollView showsVerticalScrollIndicator={false}>
+
+          {/* Banner offline */}
+          {(!isOnline || esCache) && (
+            <View style={s.offlineBanner}>
+              <Text style={s.offlineTxt}>
+                {!isOnline ? '📴 Sin conexión' : '📦 Datos en caché'} — los cobros se guardarán al reconectarte
+              </Text>
+            </View>
+          )}
 
           {/* ── Cliente card ── */}
           <View style={s.clienteCard}>
@@ -245,4 +270,6 @@ const s = StyleSheet.create({
     elevation:2,
   },
   gestionesTxt: { flex:1, color:'#1565C0', fontWeight:'700', fontSize:14 },
+  offlineBanner:{ backgroundColor:'#fff3cd', margin:12, borderRadius:10, padding:10 },
+  offlineTxt:   { color:'#856404', fontSize:12, fontWeight:'600', textAlign:'center' },
 });

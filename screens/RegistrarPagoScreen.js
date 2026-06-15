@@ -3,10 +3,93 @@ import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, StatusBar,
   ScrollView, ActivityIndicator, Alert, Platform,
 } from 'react-native';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import api from '../services/api';
+import { useConnectivity } from '../services/connectivity';
+import { encolarPago } from '../services/cobrosOffline';
 
 const fmt = (n) => `$${Number(n||0).toFixed(2)}`;
 const initials = (name='') => name.trim().split(/\s+/).slice(0,2).map(w=>w[0]?.toUpperCase()||'').join('');
+
+const imprimirReciboCobro = async ({ cliente, ventaNumero, monto, metodo, resultado }) => {
+  try {
+    const fecha = new Date().toLocaleString('es-SV', { dateStyle:'short', timeStyle:'short' });
+    const cuotasPagadas = resultado?.cuotas_pagadas || [];
+    const proxima = resultado?.proxima_cuota;
+
+    const cuotasHtml = cuotasPagadas.map(c => {
+      const estado = c.estado === 'cobrado' ? '✓ Cobrado' : c.estado === 'parcialmente_cobrado' ? '~ Parcial' : '○ Pendiente';
+      return `
+        <tr>
+          <td style="padding:5px 0;font-size:15px;color:#333">${c.cuota}</td>
+          <td style="padding:5px 0;font-size:15px;text-align:right">${fmt(c.monto_aplicado)}</td>
+          <td style="padding:5px 0;font-size:13px;text-align:right;color:${c.estado==='cobrado'?'#2e7d32':'#e65100'}">${estado}</td>
+        </tr>`;
+    }).join('');
+
+    const proximaHtml = proxima ? `
+      <div style="margin-top:14px;padding:12px;background:#f5f5f5;border-radius:6px;font-size:14px">
+        <div style="font-weight:700;margin-bottom:6px">Próxima cuota:</div>
+        <div>Cuota: <strong>${proxima.cuota}</strong></div>
+        <div>Saldo: <strong style="color:#e65100">${fmt(proxima.saldo_pendiente)}</strong></div>
+        <div>Vencimiento: <strong>${proxima.fecha_vencimiento}</strong></div>
+      </div>` : '';
+
+    const html = `
+      <html><head>
+        <meta name="viewport" content="width=device-width,initial-scale=1"/>
+        <style>
+          body{font-family:Arial,sans-serif;width:320px;margin:0 auto;padding:16px;font-size:16px}
+          .center{text-align:center} .divider{border-top:2px dashed #aaa;margin:14px 0}
+          table{width:100%;border-collapse:collapse}
+        </style>
+      </head><body>
+        <div class="center" style="margin-bottom:12px">
+          <div style="font-size:24px;font-weight:900">DISTRIBUIDORA BM</div>
+          <div style="font-size:13px;color:#666">Muebles · Electrodomésticos</div>
+        </div>
+        <div class="divider"></div>
+        <div class="center" style="font-size:17px;font-weight:800;margin-bottom:12px">━ RECIBO DE COBRO ━</div>
+
+        <table style="font-size:14px;margin-bottom:4px">
+          <tr><td><strong>Fecha:</strong></td><td style="text-align:right">${fecha}</td></tr>
+          <tr><td><strong>Cliente:</strong></td><td style="text-align:right">${cliente?.nombre || ''}</td></tr>
+          <tr><td><strong>Venta:</strong></td><td style="text-align:right">${ventaNumero || ''}</td></tr>
+          <tr><td><strong>Método:</strong></td><td style="text-align:right">${metodo}</td></tr>
+        </table>
+
+        <div class="divider"></div>
+        <div style="font-size:15px;font-weight:700;margin-bottom:8px">PAGO RECIBIDO</div>
+        <div style="font-size:26px;font-weight:900;text-align:center;margin:8px 0">${fmt(monto)}</div>
+        <div style="font-size:13px;color:#666;text-align:center">Distribuido en ${cuotasPagadas.length} cuota(s)</div>
+
+        <div class="divider"></div>
+        <div style="font-size:15px;font-weight:700;margin-bottom:8px">CUOTAS APLICADAS</div>
+        <table>${cuotasHtml}</table>
+
+        ${proximaHtml}
+
+        <div class="divider"></div>
+        <div class="center" style="font-size:15px;font-weight:700">¡Gracias por su pago!</div>
+        <div class="center" style="font-size:12px;color:#888;margin-top:4px">DISTRIBUIDORA BM</div>
+      </body></html>`;
+
+    const file = await Print.printToFileAsync({ html });
+    if (file?.uri) {
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(file.uri);
+      } else {
+        await Print.printAsync({ uri: file.uri });
+      }
+    } else {
+      await Print.printAsync({ html });
+    }
+  } catch (e) {
+    console.warn('Error imprimiendo recibo:', e?.message);
+    Alert.alert('Error', 'No se pudo imprimir el recibo');
+  }
+};
 
 const METODOS = [
   { value:'efectivo',      label:'Efectivo',      icon:'💵' },
@@ -24,6 +107,7 @@ export default function RegistrarPagoScreen({ navigation, route }) {
   const [notas,       setNotas]       = useState('');
   const [submitting,  setSubmitting]  = useState(false);
   const [showMetodos, setShowMetodos] = useState(false);
+  const { isOnline } = useConnectivity();
 
   const montoNum = parseFloat(monto)||0;
   const metodoObj = METODOS.find(m=>m.value===metodo)||METODOS[0];
@@ -32,6 +116,27 @@ export default function RegistrarPagoScreen({ navigation, route }) {
     if (!montoNum || montoNum <= 0) { Alert.alert('Monto inválido','Ingresa un monto mayor a 0'); return; }
     if (!ventaId)                   { Alert.alert('Error','No se especificó la venta'); return; }
     setSubmitting(true);
+
+    if (!isOnline) {
+      // Guardar en cola offline
+      try {
+        await encolarPago({
+          clienteId: cliente.id, clienteNombre: cliente.nombre,
+          ventaId, ventaNumero,
+          monto: montoNum, metodo,
+          referencia: referencia.trim(), notas: notas.trim(),
+        });
+        Alert.alert(
+          '✅ Cobro guardado',
+          `El pago de $${montoNum.toFixed(2)} se enviará automáticamente cuando recuperes la conexión.`,
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        );
+      } catch (e) {
+        Alert.alert('Error', 'No se pudo guardar el cobro offline.');
+      } finally { setSubmitting(false); }
+      return;
+    }
+
     try {
       const { data } = await api.post(`/cobros/clientes/${cliente.id}/pagar`, {
         monto: montoNum,
@@ -40,9 +145,33 @@ export default function RegistrarPagoScreen({ navigation, route }) {
         ...(referencia.trim() && { referencia: referencia.trim() }),
         ...(notas.trim()      && { observaciones: notas.trim() }),
       });
-      navigation.replace('PagoRegistrado',{ resultado:data, clienteId:cliente.id, clienteNombre:cliente.nombre });
+      navigation.replace('PagoRegistrado',{ resultado:data, clienteId:cliente.id, clienteNombre:cliente.nombre, clienteWhatsapp:cliente.whatsapp||cliente.telefono, montoTotal:montoNum, metodoPago:metodo, ventaNumero });
+      // Imprimir recibo en segundo plano
+      (async () => {
+        await imprimirReciboCobro({ cliente, ventaNumero, monto: montoNum, metodo, resultado: data });
+      })();
     } catch(e) {
-      Alert.alert('Error al registrar pago', e?.message||'Ocurrió un error');
+      // Si falla por red, ofrecer guardar offline
+      if (!e.response) {
+        Alert.alert(
+          'Sin conexión',
+          '¿Deseas guardar el cobro para enviarlo cuando recuperes la conexión?',
+          [
+            { text: 'Cancelar', style: 'cancel' },
+            { text: 'Guardar offline', onPress: async () => {
+              await encolarPago({
+                clienteId: cliente.id, clienteNombre: cliente.nombre,
+                ventaId, ventaNumero,
+                monto: montoNum, metodo,
+                referencia: referencia.trim(), notas: notas.trim(),
+              });
+              navigation.goBack();
+            }},
+          ]
+        );
+      } else {
+        Alert.alert('Error al registrar pago', e?.message||'Ocurrió un error');
+      }
     } finally { setSubmitting(false); }
   };
 
@@ -56,6 +185,12 @@ export default function RegistrarPagoScreen({ navigation, route }) {
         </TouchableOpacity>
         <Text style={s.headerTitle}>Registrar pago</Text>
       </View>
+
+      {!isOnline && (
+        <View style={s.offlineBanner}>
+          <Text style={s.offlineTxt}>📴 Sin conexión — el cobro se guardará y enviará al reconectarte</Text>
+        </View>
+      )}
 
       <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
@@ -206,6 +341,8 @@ export default function RegistrarPagoScreen({ navigation, route }) {
 
 const s = StyleSheet.create({
   root: { flex:1, backgroundColor:'#f5f6fa' },
+  offlineBanner:{ backgroundColor:'#fff3cd', paddingHorizontal:16, paddingVertical:10, borderBottomWidth:1, borderBottomColor:'#ffeaa7' },
+  offlineTxt:   { color:'#856404', fontSize:12, fontWeight:'600', textAlign:'center' },
   header: {
     backgroundColor:'#1565C0', flexDirection:'row', alignItems:'center',
     paddingTop:(StatusBar.currentHeight||0)+8, paddingBottom:16, paddingHorizontal:16,

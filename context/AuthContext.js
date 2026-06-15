@@ -89,16 +89,32 @@ export function AuthProvider({ children }) {
     try {
       if (!email || !password) throw new Error('Complete todos los campos');
 
+      console.log('=== LOGIN ATTEMPT ===');
+      console.log('Email:', email);
+      console.log('Posting to /login...');
+
       const { data } = await api.post('/login', { email, password });
+      console.log('Login response:', data);
+
       const t = data.token;
       if (!t) throw new Error('Respuesta inválida del servidor');
 
       setAuthToken(t);
       const { data: me } = await api.get('/me');
+      console.log('User data:', me);
+
       const userData = { ...me, token: t };
       setUser(userData);
       await saveAuthData({ user: userData, token: t, email, password });
+      console.log('✅ Login successful');
     } catch (e) {
+      console.log('=== LOGIN ERROR ===');
+      console.log('Error message:', e.message);
+      console.log('Has response:', !!e.response);
+      console.log('Response status:', e.response?.status);
+      console.log('Response data:', e.response?.data);
+      console.log('Full error:', e);
+
       // Solo fallback a offline si es error de RED, no error de credenciales del servidor
       const isNetworkError = !e.response ||
         e.message?.includes('Sin conexión') ||
@@ -106,11 +122,17 @@ export function AuthProvider({ children }) {
 
       const isServerCredentialError = e.response?.status === 401 || e.response?.status === 422;
 
+      console.log('isNetworkError:', isNetworkError);
+      console.log('isServerCredentialError:', isServerCredentialError);
+
       if (isNetworkError && !isServerCredentialError) {
+        console.log('→ Attempting offline login...');
         try {
           await attemptOfflineLogin(email, password);
+          console.log('✅ Offline login successful');
           return;
         } catch (offlineException) {
+          console.log('❌ Offline login failed:', offlineException.message);
           clearAuthToken();
           setError(offlineException.message || 'Error al iniciar sesión offline');
           return;

@@ -1,101 +1,72 @@
-import * as FileSystem from 'expo-file-system/legacy';
+import TextRecognition from '@react-native-ml-kit/text-recognition';
 
-const GOOGLE_VISION_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_VISION_API_KEY || '';
+// Palabras que aparecen en el DUI pero no son datos del cliente
+const PALABRAS_IGNORAR = [
+  'REPUBLICA','EL SALVADOR','DOCUMENTO','UNICO','IDENTIDAD',
+  'APELLIDOS','NOMBRES','NOMBRE','APELLIDO','FECHA','NACIMIENTO',
+  'DOMICILIO','PROFESION','OFICIO','ESTADO','CIVIL','VALIDEZ',
+  'FIRMA','TITULAR','REGISTRO','ELECTORAL','NUMERO','DUI',
+  'CENTROAMERICA','CENTROAMÉRICA','SALVADOREÑO','SALVADOREÑA',
+];
 
 export const extractTextFromImage = async (imageUri) => {
-  if (!GOOGLE_VISION_API_KEY) {
-    throw new Error('Google Vision API key no configurada');
+  const result = await TextRecognition.recognize(imageUri);
+  if (!result?.text) return null;
+  return parseDUI(result.text);
+};
+
+const parseDUI = (texto) => {
+  const lineas = texto
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l.length > 1);
+
+  // ── Número de DUI ──────────────────────────────────────────────────────
+  const duiMatch = texto.match(/\d{8}[-–]\d/);
+  const dui = duiMatch ? duiMatch[0].replace('–', '-') : '';
+
+  // ── Nombre y apellido ──────────────────────────────────────────────────
+  // El DUI salvadoreño tiene etiquetas: "APELLIDOS" seguido de los apellidos
+  // y "NOMBRES" seguido de los nombres
+  let apellido = '';
+  let nombre   = '';
+
+  const textoUp = texto.toUpperCase();
+
+  // Buscar después de la etiqueta APELLIDOS
+  const matchApellido = textoUp.match(/APELLIDOS?\s*[:\n\r]+\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]{2,40})/);
+  if (matchApellido) {
+    apellido = capitalizar(matchApellido[1].trim());
   }
 
-  try {
-    const base64 = await FileSystem.readAsStringAsync(imageUri, {
-      encoding: 'base64',
+  // Buscar después de la etiqueta NOMBRES
+  const matchNombre = textoUp.match(/NOMBRES?\s*[:\n\r]+\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]{2,40})/);
+  if (matchNombre) {
+    nombre = capitalizar(matchNombre[1].trim());
+  }
+
+  // Si no encontró con etiquetas, intentar con líneas limpias de palabras clave
+  if (!apellido || !nombre) {
+    const lineasLimpias = lineas.filter(l => {
+      const up = l.toUpperCase();
+      // Solo líneas con letras, sin números, que no sean palabras del documento
+      return (
+        /^[A-ZÁÉÍÓÚÑ\s]{4,}$/i.test(l) &&
+        !PALABRAS_IGNORAR.some(p => up.includes(p)) &&
+        !duiMatch?.input?.includes(l)
+      );
     });
 
-    const body = {
-      requests: [
-        {
-          image: {
-            content: base64,
-          },
-          features: [
-            {
-              type: 'TEXT_DETECTION',
-              maxResults: 10,
-            },
-          ],
-        },
-      ],
-    };
-
-    const response = await fetch(
-      `https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_VISION_API_KEY}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Google Vision API error: ${response.status}`);
-    }
-
-    const result = await response.json();
-
-    if (result.responses?.[0]?.error) {
-      throw new Error(result.responses[0].error.message);
-    }
-
-    const textAnnotations = result.responses?.[0]?.textAnnotations || [];
-    if (textAnnotations.length === 0) {
-      return null;
-    }
-
-    const fullText = textAnnotations[0]?.description || '';
-    return parseDUIData(fullText);
-  } catch (error) {
-    console.error('Error en OCR:', error);
-    throw error;
-  }
-};
-
-const parseDUIData = (text) => {
-  const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-
-  const duiRegex = /\d{8}-\d/;
-  const dui = lines.find(l => duiRegex.test(l))?.match(duiRegex)?.[0] || '';
-
-  const phoneRegex = /\d{4}-\d{4}/g;
-  const phones = text.match(phoneRegex) || [];
-
-  let nombre = '';
-  let apellido = '';
-
-  // Intenta extraer nombre y apellido del texto
-  const textUpper = text.toUpperCase();
-  const lines2 = textUpper.split('\n').map(l => l.trim()).filter(l => l && l.length > 2);
-
-  if (lines2.length > 0) {
-    const firstNameLine = lines2[0];
-    const nameParts = firstNameLine.split(/\s+/);
-
-    if (nameParts.length >= 2) {
-      apellido = nameParts[0];
-      nombre = nameParts.slice(1).join(' ');
-    } else if (nameParts.length === 1) {
-      nombre = nameParts[0];
-    }
+    if (!apellido && lineasLimpias[0]) apellido = capitalizar(lineasLimpias[0]);
+    if (!nombre  && lineasLimpias[1]) nombre   = capitalizar(lineasLimpias[1]);
   }
 
-  return {
-    nombre: nombre.toLowerCase(),
-    apellido: apellido.toLowerCase(),
-    dui: dui,
-    telefono: phones[0] || '',
-    telefonoWhatsapp: phones[1] || phones[0] || '',
-    fullText: text,
-  };
+  // ── Fecha de nacimiento ────────────────────────────────────────────────
+  const fechaMatch = texto.match(/(\d{2})[\/\-\.](\d{2})[\/\-\.](\d{4})/);
+  const fechaNac = fechaMatch ? fechaMatch[0] : '';
+
+  return { dui, nombre, apellido, fechaNac, textoCompleto: texto };
 };
+
+const capitalizar = (str) =>
+  str.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()).trim();

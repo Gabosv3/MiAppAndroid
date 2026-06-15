@@ -5,6 +5,8 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import api from '../services/api';
+import { useConnectivity } from '../services/connectivity';
+import { guardarRutaCache, leerRutaCache, contarPagosPendientes, sincronizarPagosPendientes } from '../services/cobrosOffline';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
@@ -20,19 +22,55 @@ export default function CobrosScreen({ navigation }) {
   const [error,    setError]    = useState('');
   const [query,    setQuery]    = useState('');
   const [rutaId,   setRutaId]   = useState(null);
+  const [esCache,  setEsCache]  = useState(false);
+  const [pagosPend,setPagosPend]= useState(0);
+  const { isOnline } = useConnectivity();
 
   const cargar = useCallback(async () => {
     try {
       setError('');
-      const { data } = await api.get('/cobros/ruta-hoy');
-      setDia(data.dia || '');
-      setRutas(data.rutas || []);
-      if ((data.rutas||[]).length === 1) setRutaId(data.rutas[0].id);
-    } catch (e) { setError(e?.message || 'Error'); }
-    finally { setLoading(false); setRefreshing(false); }
-  }, []);
+      if (isOnline) {
+        const { data } = await api.get('/cobros/ruta-hoy');
+        await guardarRutaCache(data);
+        setDia(data.dia || '');
+        setRutas(data.rutas || []);
+        if ((data.rutas||[]).length === 1) setRutaId(data.rutas[0].id);
+        setEsCache(false);
+        // Sincronizar pagos pendientes si hay red
+        const pendientes = await contarPagosPendientes();
+        if (pendientes > 0) {
+          const result = await sincronizarPagosPendientes(api);
+          console.log(`🔄 Cobros sincronizados: ${result.synced}/${result.total}`);
+        }
+      } else {
+        const cache = await leerRutaCache();
+        if (cache) {
+          setDia(cache.data.dia || '');
+          setRutas(cache.data.rutas || []);
+          if ((cache.data.rutas||[]).length === 1) setRutaId(cache.data.rutas[0].id);
+          setEsCache(true);
+        } else {
+          setError('Sin conexión y no hay datos guardados.\nConéctate para cargar tu ruta.');
+        }
+      }
+    } catch (e) {
+      // Si falla la red, intentar caché
+      const cache = await leerRutaCache();
+      if (cache) {
+        setDia(cache.data.dia || '');
+        setRutas(cache.data.rutas || []);
+        setEsCache(true);
+      } else {
+        setError(e?.message || 'Error');
+      }
+    } finally { setLoading(false); setRefreshing(false); }
+  }, [isOnline]);
 
-  useFocusEffect(useCallback(() => { setLoading(true); cargar(); }, [cargar]));
+  useFocusEffect(useCallback(() => {
+    setLoading(true);
+    cargar();
+    contarPagosPendientes().then(setPagosPend);
+  }, [cargar]));
 
   const todos = useMemo(() =>
     rutas.flatMap(r => (r.clientes||[]).map(c => ({ ...c, rutaNombre: r.nombre, rutaId: r.id }))),
@@ -155,12 +193,28 @@ export default function CobrosScreen({ navigation }) {
             <Text style={s.headerTitle}>Cobros</Text>
             <Text style={s.headerSub}>Ruta de hoy · <Text style={{textTransform:'capitalize'}}>{dia}</Text></Text>
           </View>
+          <TouchableOpacity
+            style={s.mapBtn}
+            onPress={() => navigation.navigate('MapaCobros', { clientes: todos })}
+          >
+            <Text style={s.mapBtnTxt}>🗺️  Mapa</Text>
+          </TouchableOpacity>
         </View>
         <View style={s.chipsRow}>
           <View style={s.chip}><Text style={s.chipTxt}>📍 {totalRutas} ruta{totalRutas!==1?'s':''}</Text></View>
           <View style={s.chip}><Text style={s.chipTxt}>👥 {totalClientes} clientes</Text></View>
+          {pagosPend > 0 && <View style={s.chipPend}><Text style={s.chipPendTxt}>⏳ {pagosPend} por sync</Text></View>}
         </View>
       </View>
+
+      {/* Banner offline */}
+      {(!isOnline || esCache) && (
+        <View style={s.offlineBanner}>
+          <Text style={s.offlineTxt}>
+            {!isOnline ? '📴 Sin conexión' : '📦 Datos en caché'} — los cobros se guardarán y enviarán al reconectarte
+          </Text>
+        </View>
+      )}
 
       {error ? (
         <View style={{flex:1,alignItems:'center',justifyContent:'center',padding:32}}>
@@ -246,11 +300,17 @@ const s = StyleSheet.create({
     paddingHorizontal: 20,
   },
   headerContent: { flexDirection:'row', justifyContent:'space-between', alignItems:'flex-start', marginBottom:14 },
+  mapBtn:    { backgroundColor:'rgba(255,255,255,0.2)', borderRadius:20, paddingHorizontal:14, paddingVertical:8, borderWidth:1, borderColor:'rgba(255,255,255,0.4)' },
+  mapBtnTxt: { color:'#fff', fontSize:13, fontWeight:'700' },
   headerTitle: { color:'#fff', fontSize:30, fontWeight:'800' },
   headerSub:   { color:'rgba(255,255,255,0.75)', fontSize:13, marginTop:2 },
   chipsRow:    { flexDirection:'row', gap:8 },
   chip:        { backgroundColor:'rgba(255,255,255,0.2)', borderRadius:20, paddingHorizontal:14, paddingVertical:6 },
   chipTxt:     { color:'#fff', fontSize:12, fontWeight:'600' },
+  chipPend:    { backgroundColor:'#F5A623', borderRadius:20, paddingHorizontal:14, paddingVertical:6 },
+  chipPendTxt: { color:'#fff', fontSize:12, fontWeight:'700' },
+  offlineBanner:{ backgroundColor:'#fff3cd', paddingHorizontal:16, paddingVertical:10, borderBottomWidth:1, borderBottomColor:'#ffeaa7' },
+  offlineTxt:  { color:'#856404', fontSize:12, fontWeight:'600', textAlign:'center' },
   retryBtn:    { backgroundColor:'#1565C0', borderRadius:10, paddingHorizontal:32, paddingVertical:12 },
   retryTxt:    { color:'#fff', fontWeight:'700', fontSize:14 },
   rutaBar:     { flexDirection:'row', backgroundColor:'#fff', paddingHorizontal:16, paddingVertical:10, gap:8, borderBottomWidth:1, borderBottomColor:'#eee' },

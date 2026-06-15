@@ -9,6 +9,7 @@ import CobrosScreen from '../screens/CobrosScreen';
 import DetalleClienteScreen from '../screens/DetalleClienteScreen';
 import RegistrarPagoScreen from '../screens/RegistrarPagoScreen';
 import PagoRegistradoScreen from '../screens/PagoRegistradoScreen';
+import MapaCobrosScreen from '../screens/MapaCobrosScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -34,6 +35,7 @@ export default function AppNavigator() {
           <Stack.Screen name="DetalleCliente"  component={DetalleClienteScreen}  options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="RegistrarPago"   component={RegistrarPagoScreen}   options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="PagoRegistrado"  component={PagoRegistradoScreen}  options={{ animation: 'fade' }} />
+          <Stack.Screen name="MapaCobros"      component={MapaCobrosScreen}      options={{ animation: 'slide_from_bottom' }} />
         </>
       ) : (
         <Stack.Screen name="Login" component={LoginScreen} />
