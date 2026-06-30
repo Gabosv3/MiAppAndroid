@@ -4,7 +4,7 @@ import Constants from 'expo-constants';
 const envUrl = process.env.EXPO_PUBLIC_API_URL;
 const manifestUrl = Constants.manifest?.extra?.EXPO_PUBLIC_API_URL;
 const expoConfigUrl = Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL;
-const BASE_URL = envUrl || manifestUrl || expoConfigUrl || 'http://192.168.1.13:8000/api';
+const BASE_URL = envUrl || manifestUrl || expoConfigUrl || 'https://panel.distribuidorabriancescomenjivar.com/api';
 
 if (!envUrl && !manifestUrl && !expoConfigUrl) {
   console.warn('API URL no encontrada en variables de entorno, usando fallback:', BASE_URL);

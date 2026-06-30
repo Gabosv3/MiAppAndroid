@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { addDebugLog } from './debugLog';
+import { fechaHoyLocal } from './dateUtils';
 
 let SQLite = null;
 let db = null;
@@ -11,6 +11,30 @@ const STORAGE_KEYS = {
   categories: 'offline_categories',
   products: 'offline_products',
   clients: 'offline_clients',
+};
+
+const ASIGNACION_KEY = 'ASIGNACION_HOY_CACHE';
+const fechaHoy = fechaHoyLocal; // hora de El Salvador, no UTC
+
+export const guardarAsignacionCache = async ({ productos, categorias, asignacionId, sucursalId }) => {
+  await AsyncStorage.setItem(ASIGNACION_KEY, JSON.stringify({
+    fecha: fechaHoy(),
+    productos,
+    categorias,
+    asignacionId,
+    sucursalId,
+  }));
+};
+
+export const leerAsignacionCache = async () => {
+  const raw = await AsyncStorage.getItem(ASIGNACION_KEY);
+  if (!raw) return null;
+  try {
+    const cache = JSON.parse(raw);
+    // Solo válida si es de hoy
+    if (cache.fecha !== fechaHoy()) return null;
+    return cache;
+  } catch { return null; }
 };
 
 const loadSQLiteModule = () => {
@@ -177,17 +201,6 @@ export const saveCategories = async (categories = []) => {
 };
 
 export const saveProducts = async (products = []) => {
-  const productList = products.map(p => ({
-    id: p.id,
-    nombre: p.nombre,
-    stock: p.stock,
-    stock_disponible: p.stock_disponible,
-    stock_asignado: p.stock_asignado,
-    cantidad_vendida: p.cantidad_vendida,
-    precio_venta: p.precio_venta,
-  }));
-  console.log(`📥 Guardando ${products.length} productos offline:`, productList);
-  await addDebugLog(`📥 Guardando ${products.length} productos`, productList);
   return saveItemsToTable('products', 'products', products);
 };
 
@@ -222,23 +235,26 @@ export const getLocalCategories = async () => {
 };
 
 export const getLocalProducts = async () => {
-  const products = await loadItemsFromTable('products', 'products');
-  const productList = products.map(p => ({
-    id: p.id,
-    nombre: p.nombre,
-    stock: p.stock,
-    stock_disponible: p.stock_disponible,
-    stock_asignado: p.stock_asignado,
-    cantidad_vendida: p.cantidad_vendida,
-    precio_venta: p.precio_venta,
-  }));
-  console.log(`📤 Cargados ${products.length} productos offline:`, productList);
-  await addDebugLog(`📤 Cargados ${products.length} productos`, productList);
-  return products;
+  return loadItemsFromTable('products', 'products');
 };
 
 export const getLocalClients = async () => {
   return loadItemsFromTable('clients', 'clients');
+};
+
+export const searchLocalClients = async (q = '') => {
+  const todos = await getLocalClients();
+  if (!q.trim()) return todos.slice(0, 30);
+  const term = q.toLowerCase();
+  return todos
+    .filter(c =>
+      c.nombre?.toLowerCase().includes(term) ||
+      c.apellido?.toLowerCase().includes(term) ||
+      c.dui?.includes(term) ||
+      c.telefono_normal?.includes(term) ||
+      (`${c.nombre} ${c.apellido}`).toLowerCase().includes(term)
+    )
+    .slice(0, 30);
 };
 
 const getCountFromTable = async (table) => {

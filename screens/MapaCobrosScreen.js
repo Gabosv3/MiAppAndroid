@@ -1,10 +1,11 @@
-import React, { useState, useRef, useMemo, memo } from 'react';
+import React, { useState, useRef, useMemo, useCallback } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, StatusBar, Dimensions, Linking, Alert,
+  View, Text, TouchableOpacity, StyleSheet, StatusBar, Linking, Alert,
 } from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
-
-const { width, height } = Dimensions.get('window');
+import { useFocusEffect } from '@react-navigation/native';
+import { WebView } from 'react-native-webview';
+import { leerHistorial } from '../services/cobrosOffline';
+import { fechaHoyLocal, fechaLocalDesdeISO } from '../services/dateUtils';
 
 const markerColor = (vencidas) => {
   if (vencidas >= 6) return '#e53e3e';   // rojo
@@ -19,15 +20,6 @@ const markerLabel = (vencidas) => {
 };
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
-
-const ClienteMarker = memo(({ cliente, onPress }) => (
-  <Marker
-    coordinate={{ latitude: cliente.ubicacion.latitud, longitude: cliente.ubicacion.longitud }}
-    pinColor={markerColor(cliente.cuotas_vencidas)}
-    onPress={() => onPress(cliente)}
-    tracksViewChanges={false}
-  />
-));
 
 const abrirNavegacion = (lat, lng, nombre) => {
   Alert.alert(
@@ -51,38 +43,131 @@ const abrirNavegacion = (lat, lng, nombre) => {
   );
 };
 
+// Construye el HTML de Leaflet + OpenStreetMap (100% gratuito, sin API key)
+const buildMapHtml = (clientes, region) => {
+  const puntos = clientes.map(c => ({
+    id: c.id,
+    lat: c.ubicacion.latitud,
+    lng: c.ubicacion.longitud,
+    color: markerColor(c.cuotas_vencidas),
+  }));
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body, #map { height:100%; width:100%; margin:0; padding:0; }
+    .leaflet-control-attribution { font-size:8px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    var map = L.map('map', { zoomControl: true }).setView(
+      [${region.latitude}, ${region.longitude}],
+      ${region.zoom}
+    );
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap',
+      maxZoom: 19
+    }).addTo(map);
+
+    var puntos = ${JSON.stringify(puntos)};
+    var bounds = [];
+
+    puntos.forEach(function (p) {
+      var marker = L.circleMarker([p.lat, p.lng], {
+        radius: 10, color: '#fff', weight: 2,
+        fillColor: p.color, fillOpacity: 0.95
+      }).addTo(map);
+      marker.on('click', function () {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'marker', id: p.id }));
+      });
+      bounds.push([p.lat, p.lng]);
+    });
+
+    if (bounds.length > 1) {
+      map.fitBounds(bounds, { padding: [40, 40] });
+    }
+
+    // Ubicación del dispositivo (si el navegador la concede)
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(function (pos) {
+        L.circleMarker([pos.coords.latitude, pos.coords.longitude], {
+          radius: 7, color: '#fff', weight: 2, fillColor: '#1565C0', fillOpacity: 1
+        }).addTo(map).bindPopup('Tu ubicación');
+      });
+    }
+  </script>
+</body>
+</html>`;
+};
+
 export default function MapaCobrosScreen({ navigation, route }) {
   const { clientes = [] } = route.params;
-  const mapRef = useRef(null);
+  const webRef = useRef(null);
   const [seleccionado, setSeleccionado] = useState(null);
+  const [visitados, setVisitados] = useState(new Set());
 
-  // Solo clientes con ubicación válida
+  useFocusEffect(useCallback(() => {
+    (async () => {
+      const fechaHoy = fechaHoyLocal();
+      const historial = await leerHistorial();
+      const idsHoy = new Set(
+        historial
+          .filter(h => fechaLocalDesdeISO(h.fecha) === fechaHoy)
+          .map(h => String(h.clienteId))
+      );
+      setVisitados(idsHoy);
+    })();
+  }, []));
+
+  // Solo clientes con ubicación válida y no visitados hoy
   const conUbicacion = useMemo(() =>
-    clientes.filter(c => c.ubicacion?.latitud && c.ubicacion?.longitud),
-  [clientes]);
+    clientes.filter(c =>
+      c.ubicacion?.latitud &&
+      c.ubicacion?.longitud &&
+      !visitados.has(String(c.id))
+    ),
+  [clientes, visitados]);
 
   // Centro del mapa: promedio de todas las coordenadas, o El Salvador por defecto
   const region = useMemo(() => {
     if (conUbicacion.length === 0) {
-      return { latitude: 13.7942, longitude: -88.8965, latitudeDelta: 2, longitudeDelta: 2 };
+      return { latitude: 13.7942, longitude: -88.8965, zoom: 8 };
     }
     const lats = conUbicacion.map(c => c.ubicacion.latitud);
     const lngs = conUbicacion.map(c => c.ubicacion.longitud);
     const minLat = Math.min(...lats), maxLat = Math.max(...lats);
     const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
     return {
-      latitude:      (minLat + maxLat) / 2,
-      longitude:     (minLng + maxLng) / 2,
-      latitudeDelta:  Math.max((maxLat - minLat) * 1.4, 0.05),
-      longitudeDelta: Math.max((maxLng - minLng) * 1.4, 0.05),
+      latitude:  (minLat + maxLat) / 2,
+      longitude: (minLng + maxLng) / 2,
+      zoom: 12,
     };
   }, [conUbicacion]);
+
+  const html = useMemo(() => buildMapHtml(conUbicacion, region), [conUbicacion, region]);
 
   const stats = useMemo(() => ({
     verde:   clientes.filter(c => c.cuotas_vencidas === 0).length,
     naranja: clientes.filter(c => c.cuotas_vencidas >= 1 && c.cuotas_vencidas <= 5).length,
     rojo:    clientes.filter(c => c.cuotas_vencidas >= 6).length,
   }), [clientes]);
+
+  const onWebMessage = useCallback((event) => {
+    try {
+      const msg = JSON.parse(event.nativeEvent.data);
+      if (msg.type === 'marker') {
+        const cliente = conUbicacion.find(c => c.id === msg.id);
+        if (cliente) setSeleccionado(cliente);
+      }
+    } catch { /* ignore */ }
+  }, [conUbicacion]);
 
   return (
     <View style={s.root}>
@@ -113,28 +198,17 @@ export default function MapaCobrosScreen({ navigation, route }) {
         </View>
       </View>
 
-      {/* Mapa */}
-      <MapView
-        ref={mapRef}
+      {/* Mapa OpenStreetMap (gratuito, sin API key) */}
+      <WebView
+        ref={webRef}
         style={s.map}
-        provider={PROVIDER_GOOGLE}
-        initialRegion={region}
-        showsUserLocation
-        showsMyLocationButton
-        moveOnMarkerPress={false}
-        showsPointsOfInterest={false}
-        showsBuildings={false}
-        showsIndoors={false}
-        toolbarEnabled={false}
-      >
-        {conUbicacion.map(c => (
-          <ClienteMarker
-            key={c.id}
-            cliente={c}
-            onPress={setSeleccionado}
-          />
-        ))}
-      </MapView>
+        originWhitelist={['*']}
+        source={{ html }}
+        javaScriptEnabled
+        domStorageEnabled
+        geolocationEnabled
+        onMessage={onWebMessage}
+      />
 
       {/* Card flotante del cliente seleccionado */}
       {seleccionado && (() => {
@@ -245,8 +319,6 @@ const s = StyleSheet.create({
   leyendaTxt:  { color:'#555', fontSize:12, fontWeight:'600' },
 
   map: { flex:1 },
-
-
 
   floatingCard: {
     position:'absolute', bottom:20, left:16, right:16,

@@ -1,22 +1,32 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, StatusBar,
-  ScrollView, ActivityIndicator, Linking,
+  ScrollView, ActivityIndicator, Linking, Modal, TextInput, Alert,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import api from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import { guardarClienteCache, leerClienteCache } from '../services/cobrosOffline';
+import * as offlineQueue from '../services/offlineQueue';
+import * as Location from 'expo-location';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 const initials = (name='') => name.trim().split(/\s+/).slice(0,2).map(w=>w[0]?.toUpperCase()||'').join('');
 
 export default function DetalleClienteScreen({ navigation, route }) {
   const { clienteId, clienteNombre } = route.params;
-  const [data,    setData]    = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState('');
-  const [esCache, setEsCache] = useState(false);
+  const [data,         setData]         = useState(null);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState('');
+  const [esCache,      setEsCache]      = useState(false);
+  const [updatingUbic,  setUpdatingUbic]  = useState(false);
+  const [modalTel,      setModalTel]      = useState(false);
+  const [telNormal,     setTelNormal]     = useState('');
+  const [telWhatsapp,   setTelWhatsapp]   = useState('');
+  const [savingTel,     setSavingTel]     = useState(false);
+  const [modalRei,      setModalRei]      = useState(null); // { ventaId, ventaNumero }
+  const [reiMotivo,     setReiMotivo]     = useState('');
+  const [savingRei,     setSavingRei]     = useState(false);
   const { isOnline } = useConnectivity();
 
   const cargar = useCallback(async () => {
@@ -42,9 +52,94 @@ export default function DetalleClienteScreen({ navigation, route }) {
 
   useFocusEffect(useCallback(()=>{ setLoading(true); cargar(); },[cargar]));
 
+  const actualizarUbicacion = async () => {
+    setUpdatingUbic(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso denegado', 'Necesitamos acceso a la ubicación.');
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+
+      if (isOnline) {
+        await api.patch(`/clientes/${clienteId}/ubicacion`, { latitud: lat, longitud: lng });
+        Alert.alert('✅ Ubicación actualizada', `Lat: ${lat.toFixed(5)}\nLon: ${lng.toFixed(5)}`);
+      } else {
+        // Sin red: encolar para sincronizar después
+        await offlineQueue.enqueueRequest({
+          method: 'PATCH',
+          url: `/clientes/${clienteId}/ubicacion`,
+          label: `Ubicación de ${clienteNombre}`,
+          data: { latitud: lat, longitud: lng },
+        });
+        Alert.alert(
+          '📍 Ubicación guardada',
+          `Se enviará al servidor cuando recuperes la conexión.\n\nLat: ${lat.toFixed(5)}\nLon: ${lng.toFixed(5)}`
+        );
+      }
+    } catch (e) {
+      Alert.alert('Error', e?.message || 'No se pudo obtener la ubicación.');
+    } finally {
+      setUpdatingUbic(false);
+    }
+  };
+
+  const guardarTelefonos = async () => {
+    if (!telNormal.trim() && !telWhatsapp.trim()) {
+      Alert.alert('Error', 'Ingresa al menos un número de teléfono');
+      return;
+    }
+    setSavingTel(true);
+    try {
+      await api.patch(`/clientes/${clienteId}/telefonos`, {
+        ...(telNormal.trim()   && { telefono_normal:   telNormal.trim() }),
+        ...(telWhatsapp.trim() && { telefono_whatsapp: telWhatsapp.trim() }),
+      });
+      setModalTel(false);
+      setLoading(true);
+      cargar();
+      Alert.alert('✅ Listo', 'Teléfonos actualizados correctamente');
+    } catch (e) {
+      Alert.alert('Error', e?.response?.data?.message || 'No se pudo actualizar');
+    } finally {
+      setSavingTel(false);
+    }
+  };
+
+  const enviarReintegro = async () => {
+    if (!reiMotivo.trim()) {
+      Alert.alert('Motivo requerido', 'Indica el motivo del reintegro');
+      return;
+    }
+    setSavingRei(true);
+    try {
+      await api.post('/reintegros', {
+        venta_id: modalRei.ventaId,
+        motivo:   reiMotivo.trim(),
+      });
+      setModalRei(null);
+      setReiMotivo('');
+      Alert.alert('✅ Reintegro creado', 'La venta fue enviada a reintegros correctamente.');
+    } catch (e) {
+      const msg = e?.response?.data?.message || 'No se pudo crear el reintegro';
+      Alert.alert('Error', msg);
+    } finally {
+      setSavingRei(false);
+    }
+  };
+
   const cliente = data?.cliente;
   const resumen = data?.resumen;
   const ventas  = data?.ventas||[];
+
+  const abrirModalTel = () => {
+    setTelNormal(cliente?.telefono || '');
+    setTelWhatsapp(cliente?.whatsapp || '');
+    setModalTel(true);
+  };
 
   return (
     <View style={s.root}>
@@ -105,6 +200,22 @@ export default function DetalleClienteScreen({ navigation, route }) {
             </View>
           </View>
 
+          {/* Botones de acción */}
+          <View style={s.accionRow}>
+            <TouchableOpacity
+              style={[s.ubicBtn, { flex: 1 }, updatingUbic && { opacity: 0.5 }]}
+              onPress={actualizarUbicacion}
+              disabled={updatingUbic}
+            >
+              <Text style={{ fontSize: 26 }}>{updatingUbic ? '⏳' : '📍'}</Text>
+              <Text style={s.ubicBtnTxt}>{updatingUbic ? 'Actualizando...' : 'Actualizar\nubicación'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[s.telBtn, { flex: 1 }]} onPress={abrirModalTel}>
+              <Text style={{ fontSize: 26 }}>📞</Text>
+              <Text style={s.telBtnTxt}>{'Editar\nteléfonos'}</Text>
+            </TouchableOpacity>
+          </View>
+
           {/* ── Resumen stats ── */}
           <View style={s.statsRow}>
             <View style={s.statCard}>
@@ -128,7 +239,6 @@ export default function DetalleClienteScreen({ navigation, route }) {
           <Text style={s.sectionTitle}>Ventas activas</Text>
 
           {ventas.map(venta => {
-            const pct = venta.total > 0 ? Math.round((venta.monto_pagado/venta.total)*100) : 0;
             return (
               <View key={venta.id} style={s.ventaCard}>
                 {/* Venta header */}
@@ -179,21 +289,42 @@ export default function DetalleClienteScreen({ navigation, route }) {
                   </Text>
                 </View>
 
-                <TouchableOpacity
-                  style={s.cobrarBtn}
-                  onPress={() => navigation.navigate('RegistrarPago',{
-                    cliente: {id:clienteId, nombre:cliente?.nombre, ...cliente},
-                    ventaId: venta.id,
-                    ventaNumero: venta.numero_venta,
-                    saldoPendiente: venta.saldo_pendiente,
-                    cuotasVencidas: venta.resumen?.vencidas||0,
-                  })}
-                >
-                  <Text style={s.cobrarBtnTxt}>Cobrar esta venta</Text>
-                </TouchableOpacity>
+                <View style={s.ventaBtnRow}>
+                  <TouchableOpacity
+                    style={[s.cobrarBtn, { flex: 1 }]}
+                    onPress={() => navigation.navigate('RegistrarPago',{
+                      cliente: {id:clienteId, nombre:cliente?.nombre, ...cliente},
+                      ventaId: venta.id,
+                      ventaNumero: venta.numero_venta,
+                      saldoPendiente: venta.saldo_pendiente,
+                      cuotasVencidas: venta.resumen?.vencidas||0,
+                    })}
+                  >
+                    <Text style={s.cobrarBtnTxt}>💰 Cobrar</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={s.reintegroBtn}
+                    onPress={() => { setModalRei({ ventaId: venta.id, ventaNumero: venta.numero_venta }); setReiMotivo(''); }}
+                  >
+                    <Text style={s.reintegroBtnTxt}>📦 Reintegro</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             );
           })}
+
+          {/* ── Sin pago / No estaba ── */}
+          <TouchableOpacity
+            style={s.visitaBtn}
+            onPress={() => navigation.navigate('RegistrarVisita', { cliente: { id: clienteId, nombre: cliente?.nombre } })}
+          >
+            <Text style={s.visitaBtnIco}>🚪</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={s.visitaBtnTxt}>Sin pago / No estaba</Text>
+              <Text style={s.visitaBtnSub}>Registrar visita sin cobro</Text>
+            </View>
+            <Text style={{ fontSize: 18, color: '#e65100' }}>›</Text>
+          </TouchableOpacity>
 
           {/* ── Gestiones ── */}
           <TouchableOpacity style={s.gestionesRow}>
@@ -205,6 +336,77 @@ export default function DetalleClienteScreen({ navigation, route }) {
           <View style={{height:32}}/>
         </ScrollView>
       )}
+
+      {/* Modal reintegro */}
+      <Modal visible={!!modalRei} transparent animationType="slide" onRequestClose={() => setModalRei(null)}>
+        <View style={s.modalOverlay}>
+          <View style={s.modalBox}>
+            <Text style={s.modalTitle}>📦 Enviar a reintegro</Text>
+            <Text style={s.modalSub}>{cliente?.nombre} · {modalRei?.ventaNumero}</Text>
+
+            <Text style={s.modalLabel}>Motivo del reintegro *</Text>
+            <TextInput
+              style={[s.modalInput, { minHeight: 80, textAlignVertical: 'top' }]}
+              value={reiMotivo}
+              onChangeText={setReiMotivo}
+              placeholder="Ej: Cliente no paga, no contesta llamadas, 6 cuotas vencidas..."
+              multiline
+            />
+
+            <TouchableOpacity
+              style={[s.guardarBtn, { backgroundColor: '#B71C1C' }, savingRei && { opacity: 0.6 }]}
+              onPress={enviarReintegro}
+              disabled={savingRei}
+            >
+              <Text style={s.guardarBtnTxt}>{savingRei ? 'Enviando...' : '📦 Confirmar reintegro'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.cancelBtn} onPress={() => setModalRei(null)}>
+              <Text style={s.cancelBtnTxt}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal editar teléfonos */}
+      <Modal visible={modalTel} transparent animationType="slide" onRequestClose={() => setModalTel(false)}>
+        <View style={s.modalOverlay}>
+          <View style={s.modalBox}>
+            <Text style={s.modalTitle}>Editar teléfonos</Text>
+            <Text style={s.modalSub}>{cliente?.nombre}</Text>
+
+            <Text style={s.modalLabel}>Teléfono principal</Text>
+            <TextInput
+              style={s.modalInput}
+              value={telNormal}
+              onChangeText={setTelNormal}
+              placeholder="Ej: 75123456"
+              keyboardType="phone-pad"
+              maxLength={20}
+            />
+
+            <Text style={s.modalLabel}>WhatsApp</Text>
+            <TextInput
+              style={s.modalInput}
+              value={telWhatsapp}
+              onChangeText={setTelWhatsapp}
+              placeholder="Ej: 75123456"
+              keyboardType="phone-pad"
+              maxLength={20}
+            />
+
+            <TouchableOpacity
+              style={[s.guardarBtn, savingTel && { opacity: 0.6 }]}
+              onPress={guardarTelefonos}
+              disabled={savingTel}
+            >
+              <Text style={s.guardarBtnTxt}>{savingTel ? 'Guardando...' : '💾 Guardar teléfonos'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.cancelBtn} onPress={() => setModalTel(false)}>
+              <Text style={s.cancelBtnTxt}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -261,8 +463,11 @@ const s = StyleSheet.create({
   pillTxt:      { fontSize:12, fontWeight:'600' },
   cuotasInfo:   { backgroundColor:'#f5f6fa', borderRadius:8, padding:10, marginBottom:12 },
   cuotasInfoTxt:{ color:'#666', fontSize:12 },
-  cobrarBtn:    { backgroundColor:'#1565C0', borderRadius:10, paddingVertical:13, alignItems:'center' },
-  cobrarBtnTxt: { color:'#fff', fontWeight:'800', fontSize:14 },
+  ventaBtnRow:    { flexDirection:'row', gap:8 },
+  cobrarBtn:      { backgroundColor:'#1565C0', borderRadius:10, paddingVertical:13, alignItems:'center' },
+  cobrarBtnTxt:   { color:'#fff', fontWeight:'800', fontSize:14 },
+  reintegroBtn:   { backgroundColor:'#fff', borderWidth:1.5, borderColor:'#B71C1C', borderRadius:10, paddingVertical:13, paddingHorizontal:14, alignItems:'center' },
+  reintegroBtnTxt:{ color:'#B71C1C', fontWeight:'800', fontSize:13 },
 
   gestionesRow: {
     flexDirection:'row', alignItems:'center', gap:12,
@@ -270,6 +475,40 @@ const s = StyleSheet.create({
     elevation:2,
   },
   gestionesTxt: { flex:1, color:'#1565C0', fontWeight:'700', fontSize:14 },
+  visitaBtn: {
+    flexDirection:'row', alignItems:'center', gap:12,
+    backgroundColor:'#fff8f0', marginHorizontal:12, marginTop:8, borderRadius:14, padding:16,
+    elevation:2, borderWidth:1.5, borderColor:'#ffcc80',
+  },
+  visitaBtnIco: { fontSize:24 },
+  visitaBtnTxt: { color:'#e65100', fontWeight:'800', fontSize:14 },
+  visitaBtnSub: { color:'#bf360c', fontSize:11, marginTop:2 },
   offlineBanner:{ backgroundColor:'#fff3cd', margin:12, borderRadius:10, padding:10 },
   offlineTxt:   { color:'#856404', fontSize:12, fontWeight:'600', textAlign:'center' },
+  accionRow:    { flexDirection:'row', marginHorizontal:12, marginTop:10, marginBottom:14, gap:10 },
+  ubicBtn: {
+    backgroundColor:'#e8f5e9', borderRadius:14, paddingVertical:16,
+    alignItems:'center', justifyContent:'center',
+    borderWidth:1, borderColor:'#a5d6a7',
+    elevation:1,
+  },
+  ubicBtnTxt:   { color:'#2e7d32', fontWeight:'800', fontSize:13, marginTop:4 },
+  telBtn: {
+    backgroundColor:'#e3f2fd', borderRadius:14, paddingVertical:16,
+    alignItems:'center', justifyContent:'center',
+    borderWidth:1, borderColor:'#90caf9',
+    elevation:1,
+  },
+  telBtnTxt:    { color:'#1565C0', fontWeight:'800', fontSize:13, marginTop:4 },
+
+  modalOverlay: { flex:1, backgroundColor:'rgba(0,0,0,0.5)', justifyContent:'flex-end' },
+  modalBox:     { backgroundColor:'#fff', borderTopLeftRadius:20, borderTopRightRadius:20, padding:24, paddingBottom:36 },
+  modalTitle:   { fontSize:18, fontWeight:'900', color:'#1a1a1a', marginBottom:2 },
+  modalSub:     { color:'#888', fontSize:13, marginBottom:16 },
+  modalLabel:   { fontSize:13, fontWeight:'700', color:'#555', marginBottom:6, marginTop:12 },
+  modalInput:   { borderWidth:1, borderColor:'#ddd', borderRadius:10, padding:12, fontSize:14, color:'#333' },
+  guardarBtn:   { backgroundColor:'#1565C0', borderRadius:12, paddingVertical:14, alignItems:'center', marginTop:20 },
+  guardarBtnTxt:{ color:'#fff', fontWeight:'800', fontSize:15 },
+  cancelBtn:    { marginTop:10, alignItems:'center', paddingVertical:10 },
+  cancelBtnTxt: { color:'#999', fontSize:14 },
 });

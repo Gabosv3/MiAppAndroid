@@ -4,87 +4,71 @@ import {
   ScrollView, ActivityIndicator, Alert, Platform,
 } from 'react-native';
 import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
 import api from '../services/api';
 import { useConnectivity } from '../services/connectivity';
-import { encolarPago } from '../services/cobrosOffline';
+import { encolarPago, guardarEnHistorial, marcarClienteVisitado } from '../services/cobrosOffline';
+import { useAuth } from '../context/AuthContext';
 
 const fmt = (n) => `$${Number(n||0).toFixed(2)}`;
 const initials = (name='') => name.trim().split(/\s+/).slice(0,2).map(w=>w[0]?.toUpperCase()||'').join('');
 
-const imprimirReciboCobro = async ({ cliente, ventaNumero, monto, metodo, resultado }) => {
+const imprimirReciboCobro = async ({ cliente, ventaNumero, monto, metodo, proximaVisita, saldoAntes, saldoDespues, nombreCobrador }) => {
   try {
-    const fecha = new Date().toLocaleString('es-SV', { dateStyle:'short', timeStyle:'short' });
-    const cuotasPagadas = resultado?.cuotas_pagadas || [];
-    const proxima = resultado?.proxima_cuota;
-
-    const cuotasHtml = cuotasPagadas.map(c => {
-      const estado = c.estado === 'cobrado' ? '✓ Cobrado' : c.estado === 'parcialmente_cobrado' ? '~ Parcial' : '○ Pendiente';
-      return `
-        <tr>
-          <td style="padding:5px 0;font-size:15px;color:#333">${c.cuota}</td>
-          <td style="padding:5px 0;font-size:15px;text-align:right">${fmt(c.monto_aplicado)}</td>
-          <td style="padding:5px 0;font-size:13px;text-align:right;color:${c.estado==='cobrado'?'#2e7d32':'#e65100'}">${estado}</td>
-        </tr>`;
-    }).join('');
-
-    const proximaHtml = proxima ? `
-      <div style="margin-top:14px;padding:12px;background:#f5f5f5;border-radius:6px;font-size:14px">
-        <div style="font-weight:700;margin-bottom:6px">Próxima cuota:</div>
-        <div>Cuota: <strong>${proxima.cuota}</strong></div>
-        <div>Saldo: <strong style="color:#e65100">${fmt(proxima.saldo_pendiente)}</strong></div>
-        <div>Vencimiento: <strong>${proxima.fecha_vencimiento}</strong></div>
-      </div>` : '';
+    const fecha   = new Date().toLocaleDateString('es-SV');
+    const proxFmt = proximaVisita
+      ? new Date(proximaVisita + 'T12:00:00').toLocaleDateString('es-SV', { day:'2-digit', month:'long', year:'numeric' })
+      : '';
 
     const html = `
       <html><head>
         <meta name="viewport" content="width=device-width,initial-scale=1"/>
         <style>
-          body{font-family:Arial,sans-serif;width:320px;margin:0 auto;padding:16px;font-size:16px}
-          .center{text-align:center} .divider{border-top:2px dashed #aaa;margin:14px 0}
-          table{width:100%;border-collapse:collapse}
+          *{box-sizing:border-box;margin:0;padding:0}
+          body{font-family:Arial,sans-serif;width:220px;margin:0 auto;padding:8px 6px;font-size:11px}
+          .center{text-align:center}
+          .divider{border:none;border-top:1px dashed #bbb;margin:6px 0}
+          .row{display:flex;flex-direction:row;justify-content:space-between;align-items:center;padding:3px 0}
+          .row .lbl{flex:1;color:#333}
+          .row .val{font-weight:700;text-align:right;white-space:nowrap;padding-left:6px}
+          .abono{background:#e8f5e9;border-radius:4px;padding:5px 6px;margin:3px 0}
+          .abono .lbl{color:#2e7d32;font-weight:800}
+          .abono .val{font-size:15px;font-weight:900;color:#1b5e20}
+          .sep{border:none;border-top:1px solid #eee;margin:1px 0}
         </style>
       </head><body>
-        <div class="center" style="margin-bottom:12px">
-          <div style="font-size:24px;font-weight:900">DISTRIBUIDORA BM</div>
-          <div style="font-size:13px;color:#666">Muebles · Electrodomésticos</div>
+        <div class="center" style="margin-bottom:6px">
+          <div style="font-size:14px;font-weight:900">DISTRIBUIDORA BM</div>
+          <div style="font-size:9px;color:#888">Muebles · Electrodomésticos</div>
         </div>
-        <div class="divider"></div>
-        <div class="center" style="font-size:17px;font-weight:800;margin-bottom:12px">━ RECIBO DE COBRO ━</div>
+        <hr class="divider"/>
+        <div class="center" style="font-size:11px;font-weight:800;margin-bottom:6px">RECIBO DE COBRO</div>
 
-        <table style="font-size:14px;margin-bottom:4px">
-          <tr><td><strong>Fecha:</strong></td><td style="text-align:right">${fecha}</td></tr>
-          <tr><td><strong>Cliente:</strong></td><td style="text-align:right">${cliente?.nombre || ''}</td></tr>
-          <tr><td><strong>Venta:</strong></td><td style="text-align:right">${ventaNumero || ''}</td></tr>
-          <tr><td><strong>Método:</strong></td><td style="text-align:right">${metodo}</td></tr>
-        </table>
+        <div class="row"><span class="lbl"><b>Fecha:</b></span><span class="val">${fecha}</span></div>
+        <div class="row"><span class="lbl"><b>Cliente:</b></span><span class="val">${cliente?.nombre || ''}</span></div>
+        <div class="row"><span class="lbl"><b>Venta:</b></span><span class="val">${ventaNumero || 'N/A'}</span></div>
+        <div class="row"><span class="lbl"><b>Cobrador:</b></span><span class="val">${nombreCobrador}</span></div>
+        <div class="row"><span class="lbl"><b>Método:</b></span><span class="val">${metodo}</span></div>
 
-        <div class="divider"></div>
-        <div style="font-size:15px;font-weight:700;margin-bottom:8px">PAGO RECIBIDO</div>
-        <div style="font-size:26px;font-weight:900;text-align:center;margin:8px 0">${fmt(monto)}</div>
-        <div style="font-size:13px;color:#666;text-align:center">Distribuido en ${cuotasPagadas.length} cuota(s)</div>
+        <hr class="divider"/>
 
-        <div class="divider"></div>
-        <div style="font-size:15px;font-weight:700;margin-bottom:8px">CUOTAS APLICADAS</div>
-        <table>${cuotasHtml}</table>
+        <div class="row"><span class="lbl">Lo que debía:</span><span class="val" style="color:#c62828">${fmt(saldoAntes)}</span></div>
+        <hr class="sep"/>
+        <div class="row abono"><span class="lbl">Lo que abona:</span><span class="val">${fmt(monto)}</span></div>
+        <hr class="sep"/>
+        <div class="row"><span class="lbl">Lo que resta:</span><span class="val" style="color:#e65100">${fmt(saldoDespues)}</span></div>
 
-        ${proximaHtml}
+        <hr class="divider"/>
+        ${proxFmt ? `
+        <div class="center" style="margin:6px 0">
+          <div style="font-size:9px;color:#888">PROXIMA VISITA</div>
+          <div style="font-size:12px;font-weight:900;color:#1565C0">${proxFmt}</div>
+        </div>
+        <hr class="divider"/>` : ''}
 
-        <div class="divider"></div>
-        <div class="center" style="font-size:15px;font-weight:700">¡Gracias por su pago!</div>
-        <div class="center" style="font-size:12px;color:#888;margin-top:4px">DISTRIBUIDORA BM</div>
+        <div class="center" style="font-weight:700;font-size:11px">Gracias por su pago!</div>
       </body></html>`;
 
-    const file = await Print.printToFileAsync({ html });
-    if (file?.uri) {
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(file.uri);
-      } else {
-        await Print.printAsync({ uri: file.uri });
-      }
-    } else {
-      await Print.printAsync({ html });
-    }
+    await Print.printAsync({ html });
   } catch (e) {
     console.warn('Error imprimiendo recibo:', e?.message);
     Alert.alert('Error', 'No se pudo imprimir el recibo');
@@ -100,8 +84,11 @@ const METODOS = [
 
 export default function RegistrarPagoScreen({ navigation, route }) {
   const { cliente, ventaId, ventaNumero, saldoPendiente, cuotasVencidas } = route.params;
+  const { user } = useAuth();
+  const nombreCobrador = user?.name || user?.full_name || user?.nombre || user?.usuario || 'Cobrador';
 
-  const [monto,       setMonto]       = useState(saldoPendiente ? String(Number(saldoPendiente).toFixed(2)) : '');
+  const saldoNum = parseFloat(String(saldoPendiente || '0').replace(',', '.')) || 0;
+  const [monto,       setMonto]       = useState('');
   const [metodo,      setMetodo]      = useState('efectivo');
   const [referencia,  setReferencia]  = useState('');
   const [notas,       setNotas]       = useState('');
@@ -112,13 +99,10 @@ export default function RegistrarPagoScreen({ navigation, route }) {
   const montoNum = parseFloat(monto)||0;
   const metodoObj = METODOS.find(m=>m.value===metodo)||METODOS[0];
 
-  const registrar = async () => {
-    if (!montoNum || montoNum <= 0) { Alert.alert('Monto inválido','Ingresa un monto mayor a 0'); return; }
-    if (!ventaId)                   { Alert.alert('Error','No se especificó la venta'); return; }
+  const ejecutarRegistro = async () => {
     setSubmitting(true);
 
     if (!isOnline) {
-      // Guardar en cola offline
       try {
         await encolarPago({
           clienteId: cliente.id, clienteNombre: cliente.nombre,
@@ -126,11 +110,33 @@ export default function RegistrarPagoScreen({ navigation, route }) {
           monto: montoNum, metodo,
           referencia: referencia.trim(), notas: notas.trim(),
         });
-        Alert.alert(
-          '✅ Cobro guardado',
-          `El pago de $${montoNum.toFixed(2)} se enviará automáticamente cuando recuperes la conexión.`,
-          [{ text: 'OK', onPress: () => navigation.goBack() }]
-        );
+        // Guardar en historial local también (para que aparezca en HistorialDiaScreen)
+        const saldoAntes = saldoNum;
+        const saldoDespues = Math.max(0, saldoAntes - montoNum);
+        await guardarEnHistorial({
+          clienteId: cliente.id, clienteNombre: cliente.nombre,
+          ventaNumero, monto: montoNum, metodo,
+          resultado: {
+            ok: true,
+            mensaje: 'Cobro pendiente de envío (offline)',
+            proxima_cuota: null,
+          },
+        });
+        await marcarClienteVisitado(cliente.id);
+        navigation.replace('PagoRegistrado', {
+          isOffline: true,
+          autoImprimir: true,
+          clienteId: cliente.id,
+          clienteNombre: cliente.nombre,
+          clienteWhatsapp: cliente.whatsapp || cliente.telefono,
+          montoTotal: montoNum,
+          metodoPago: metodo,
+          ventaNumero,
+          proximaVisita: null,
+          saldoAntes,
+          saldoDespues,
+          nombreCobrador,
+        });
       } catch (e) {
         Alert.alert('Error', 'No se pudo guardar el cobro offline.');
       } finally { setSubmitting(false); }
@@ -145,13 +151,29 @@ export default function RegistrarPagoScreen({ navigation, route }) {
         ...(referencia.trim() && { referencia: referencia.trim() }),
         ...(notas.trim()      && { observaciones: notas.trim() }),
       });
-      navigation.replace('PagoRegistrado',{ resultado:data, clienteId:cliente.id, clienteNombre:cliente.nombre, clienteWhatsapp:cliente.whatsapp||cliente.telefono, montoTotal:montoNum, metodoPago:metodo, ventaNumero });
-      // Imprimir recibo en segundo plano
-      (async () => {
-        await imprimirReciboCobro({ cliente, ventaNumero, monto: montoNum, metodo, resultado: data });
-      })();
+      const histItem = await guardarEnHistorial({
+        clienteId: cliente.id, clienteNombre: cliente.nombre,
+        ventaNumero, monto: montoNum, metodo, resultado: data,
+      });
+      await marcarClienteVisitado(cliente.id);
+      const saldoAntes   = saldoNum;
+      const saldoDespues = Math.max(0, saldoAntes - montoNum);
+
+      navigation.replace('PagoRegistrado', {
+        autoImprimir: true,
+        resultado: data,
+        clienteId: cliente.id,
+        clienteNombre: cliente.nombre,
+        clienteWhatsapp: cliente.whatsapp || cliente.telefono,
+        montoTotal: montoNum,
+        metodoPago: metodo,
+        ventaNumero,
+        proximaVisita: histItem.proximaVisita,
+        saldoAntes,
+        saldoDespues,
+        nombreCobrador,
+      });
     } catch(e) {
-      // Si falla por red, ofrecer guardar offline
       if (!e.response) {
         Alert.alert(
           'Sin conexión',
@@ -174,6 +196,34 @@ export default function RegistrarPagoScreen({ navigation, route }) {
       }
     } finally { setSubmitting(false); }
   };
+
+  const registrar = () => {
+    if (!montoNum || montoNum <= 0) { Alert.alert('Monto inválido','Ingresa un monto mayor a 0'); return; }
+    if (!ventaId)                   { Alert.alert('Error','No se especificó la venta'); return; }
+    if (saldoNum > 0 && montoNum > saldoNum) {
+      Alert.alert('Monto excede el saldo', `El monto ($${montoNum.toFixed(2)}) supera el saldo pendiente ($${saldoNum.toFixed(2)}). ¿Deseas continuar?`,
+        [
+          { text: 'Corregir', style: 'cancel' },
+          { text: 'Continuar igual', onPress: () => confirmar() },
+        ]
+      );
+      return;
+    }
+    confirmar();
+  };
+
+  const confirmar = () => {
+    Alert.alert(
+      '¿Confirmar pago?',
+      `Cliente: ${cliente?.nombre}\nVenta: ${ventaNumero || 'N/A'}\nMonto: $${montoNum.toFixed(2)}\nMétodo: ${metodoObj.label}`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Sí, registrar', style: 'default', onPress: ejecutarRegistro },
+      ],
+      { cancelable: true }
+    );
+  };
+
 
   return (
     <View style={s.root}>

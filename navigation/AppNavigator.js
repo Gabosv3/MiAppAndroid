@@ -10,6 +10,11 @@ import DetalleClienteScreen from '../screens/DetalleClienteScreen';
 import RegistrarPagoScreen from '../screens/RegistrarPagoScreen';
 import PagoRegistradoScreen from '../screens/PagoRegistradoScreen';
 import MapaCobrosScreen from '../screens/MapaCobrosScreen';
+import HistorialDiaScreen from '../screens/HistorialDiaScreen';
+import HistorialVentasScreen from '../screens/HistorialVentasScreen';
+import VentaRegistradaScreen from '../screens/VentaRegistradaScreen';
+import ReintegrosScreen from '../screens/ReintegrosScreen';
+import RegistrarVisitaScreen from '../screens/RegistrarVisitaScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -36,6 +41,11 @@ export default function AppNavigator() {
           <Stack.Screen name="RegistrarPago"   component={RegistrarPagoScreen}   options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="PagoRegistrado"  component={PagoRegistradoScreen}  options={{ animation: 'fade' }} />
           <Stack.Screen name="MapaCobros"      component={MapaCobrosScreen}      options={{ animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="HistorialDia"    component={HistorialDiaScreen}     options={{ animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="HistorialVentas"   component={HistorialVentasScreen}   options={{ animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="VentaRegistrada"  component={VentaRegistradaScreen}   options={{ animation: 'fade' }} />
+          <Stack.Screen name="Reintegros"       component={ReintegrosScreen}       options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="RegistrarVisita"  component={RegistrarVisitaScreen}  options={{ animation: 'slide_from_bottom' }} />
         </>
       ) : (
         <Stack.Screen name="Login" component={LoginScreen} />

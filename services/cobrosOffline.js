@@ -1,21 +1,32 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { fechaHoyLocal, fechaLocalDesde } from './dateUtils';
 
 const KEYS = {
-  ruta:    'COBROS_RUTA_CACHE',
-  clientes:'COBROS_CLIENTES_CACHE',
-  pagos:   'COBROS_PAGOS_PENDIENTES',
+  ruta:      'COBROS_RUTA_CACHE',
+  clientes:  'COBROS_CLIENTES_CACHE',
+  pagos:     'COBROS_PAGOS_PENDIENTES',
+  historial: 'COBROS_HISTORIAL',
+  orden:     'COBROS_ORDEN_CLIENTES',
+  visitados: 'COBROS_VISITADOS_HOY',
 };
+
+const fechaHoy = fechaHoyLocal; // hora de El Salvador, no UTC
 
 // ─── RUTA HOY ───────────────────────────────────────────────────────────────
 
 export const guardarRutaCache = async (data) => {
-  await AsyncStorage.setItem(KEYS.ruta, JSON.stringify({ data, savedAt: Date.now() }));
+  await AsyncStorage.setItem(KEYS.ruta, JSON.stringify({ data, fecha: fechaHoy(), savedAt: Date.now() }));
 };
 
 export const leerRutaCache = async () => {
   const raw = await AsyncStorage.getItem(KEYS.ruta);
   if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
+  try {
+    const cache = JSON.parse(raw);
+    // Solo válida si es de hoy
+    if (cache.fecha !== fechaHoy()) return null;
+    return cache;
+  } catch { return null; }
 };
 
 // ─── DETALLE CLIENTE ─────────────────────────────────────────────────────────
@@ -69,6 +80,87 @@ export const contarPagosPendientes = async () => {
   return cola.length;
 };
 
+// ─── HISTORIAL DE COBROS ─────────────────────────────────────────────────────
+
+const proximaVisita = (diasBase = 14) => {
+  const d = new Date();
+  d.setDate(d.getDate() + diasBase);
+  return fechaLocalDesde(d); // "2026-06-29" en hora de El Salvador
+};
+
+export const guardarEnHistorial = async ({
+  clienteId, clienteNombre, ventaNumero, monto, metodo, resultado,
+  tipo = 'pago', resultadoVisita = null, observaciones = null,
+}) => {
+  const raw = await AsyncStorage.getItem(KEYS.historial);
+  const historial = raw ? JSON.parse(raw) : [];
+  const item = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    tipo, // 'pago' | 'visita'
+    clienteId,
+    clienteNombre,
+    ventaNumero,
+    monto,
+    metodo,
+    resultadoVisita, // 'sin_pago' | 'promesa_pago' | 'no_encontrado' | 'rechazo'
+    observaciones,
+    fecha: new Date().toISOString(),
+    proximaVisita: tipo === 'pago' ? proximaVisita(14) : null,
+    resultado, // guardamos la respuesta completa internamente
+  };
+  historial.unshift(item); // más reciente primero
+  // Mantener máximo 200 registros
+  await AsyncStorage.setItem(KEYS.historial, JSON.stringify(historial.slice(0, 200)));
+  return item;
+};
+
+export const leerHistorial = async () => {
+  const raw = await AsyncStorage.getItem(KEYS.historial);
+  if (!raw) return [];
+  try { return JSON.parse(raw); } catch { return []; }
+};
+
+export const leerHistorialCliente = async (clienteId) => {
+  const todos = await leerHistorial();
+  return todos.filter(h => h.clienteId === clienteId);
+};
+
+// ─── ORDEN PERSONALIZADO DE CLIENTES ──────────────────────────────────────────
+// Guarda el orden en que el cobrador prefiere visitar a sus clientes (arrastre manual).
+
+export const guardarOrdenClientes = async (ids) => {
+  await AsyncStorage.setItem(KEYS.orden, JSON.stringify(ids));
+};
+
+export const leerOrdenClientes = async () => {
+  const raw = await AsyncStorage.getItem(KEYS.orden);
+  if (!raw) return [];
+  try { return JSON.parse(raw); } catch { return []; }
+};
+
+// ─── CLIENTES VISITADOS HOY ───────────────────────────────────────────────────
+// Se quitan de la lista de ruta apenas se registra un pago o una visita (con o
+// sin abono), para que el cobrador vea solo a quién le falta visitar. Se
+// reinicia automáticamente al cambiar de día.
+
+export const marcarClienteVisitado = async (clienteId) => {
+  const raw = await AsyncStorage.getItem(KEYS.visitados);
+  let store = raw ? JSON.parse(raw) : null;
+  if (!store || store.fecha !== fechaHoy()) store = { fecha: fechaHoy(), ids: [] };
+  if (!store.ids.includes(clienteId)) store.ids.push(clienteId);
+  await AsyncStorage.setItem(KEYS.visitados, JSON.stringify(store));
+};
+
+export const leerClientesVisitadosHoy = async () => {
+  const raw = await AsyncStorage.getItem(KEYS.visitados);
+  if (!raw) return [];
+  try {
+    const store = JSON.parse(raw);
+    if (store.fecha !== fechaHoy()) return [];
+    return store.ids || [];
+  } catch { return []; }
+};
+
 // ─── SINCRONIZAR PAGOS ───────────────────────────────────────────────────────
 
 export const sincronizarPagosPendientes = async (api) => {
@@ -80,12 +172,21 @@ export const sincronizarPagosPendientes = async (api) => {
 
   for (const pago of cola) {
     try {
-      await api.post(`/cobros/clientes/${pago.clienteId}/pagar`, {
+      const { data } = await api.post(`/cobros/clientes/${pago.clienteId}/pagar`, {
         monto: pago.monto,
         metodo_pago: pago.metodo,
         ...(pago.ventaId    && { venta_id: pago.ventaId }),
         ...(pago.referencia && { referencia: pago.referencia }),
         ...(pago.notas      && { observaciones: pago.notas }),
+      });
+      // Actualizar el historial con la respuesta real del servidor
+      await guardarEnHistorial({
+        clienteId: pago.clienteId,
+        clienteNombre: pago.clienteNombre,
+        ventaNumero: pago.ventaNumero,
+        monto: pago.monto,
+        metodo: pago.metodo,
+        resultado: data, // respuesta real del servidor
       });
       await eliminarPago(pago.id);
       synced++;

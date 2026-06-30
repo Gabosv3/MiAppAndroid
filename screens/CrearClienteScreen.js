@@ -22,13 +22,15 @@ export default function CrearClienteScreen({ navigation }) {
   const [telefonoWhatsapp, setTelefonoWhatsapp] = useState('');
   const [latitud, setLatitud] = useState('');
   const [longitud, setLongitud] = useState('');
+  const [fotoCasa, setFotoCasa] = useState(null);
   const [duiFrente, setDuiFrente] = useState(null);
   const [duiReverso, setDuiReverso] = useState(null);
   const [loading, setLoading] = useState(false);
   const [locationLoading, setLocationLoading] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
-  
+  const [scanningOcr, setScanningOcr] = useState(false);
+
   // Estados de error
   const [nombreError, setNombreError] = useState('');
   const [apellidoError, setApellidoError] = useState('');
@@ -112,67 +114,69 @@ export default function CrearClienteScreen({ navigation }) {
     }
   };
 
-  // ==================== TOMAR FOTOS ====================
-  const tomarFoto = async (side) => {
+  // ==================== ESCANEAR DUI CON OCR ====================
+  const escanearDui = async () => {
     try {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permiso requerido', 'Necesitamos acceso a la cámara para tomar la foto del DUI.');
+        Alert.alert('Permiso requerido', 'Necesitamos acceso a la cámara.');
         return;
       }
-
-      const result = await ImagePicker.launchCameraAsync({
-        allowsEditing: true,
-        quality: 0.8,
-        base64: false,
-      });
-
-      if (!result.canceled && result.assets && result.assets[0]) {
-        const asset = result.assets[0];
-
-        const imageFile = {
-          uri: asset.uri,
-          name: `dui_${side}_${Date.now()}.jpg`,
-          type: 'image/jpeg',
-        };
-
-        if (side === 'frente') {
-          setDuiFrente(imageFile);
-          setFrenteError('');
-
-          // Escanear DUI con ML Kit
-          try {
-            const datos = await extractTextFromImage(asset.uri);
-            if (datos) {
-              const campos = [];
-              if (datos.dui && !dui) {
-                handleDuiChange(datos.dui);
-                campos.push(`DUI: ${datos.dui}`);
-              }
-              if (datos.nombre && !nombre) {
-                handleNombreChange(datos.nombre);
-                campos.push(`Nombre: ${datos.nombre}`);
-              }
-              if (datos.apellido && !apellido) {
-                handleApellidoChange(datos.apellido);
-                campos.push(`Apellido: ${datos.apellido}`);
-              }
-              if (campos.length > 0) {
-                Alert.alert('✅ Datos detectados', campos.join('\n'));
-              } else {
-                Alert.alert('⚠️ Sin datos', 'No se detectaron datos. Asegúrate de enfocar bien el frente del DUI.');
-              }
-            }
-          } catch (ocrError) {
-            console.warn('OCR error:', ocrError.message);
+      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.9 });
+      if (!result.canceled && result.assets?.[0]) {
+        setScanningOcr(true);
+        try {
+          const datos = await extractTextFromImage(result.assets[0].uri);
+          if (datos) {
+            const campos = [];
+            if (datos.dui && !dui)       { handleDuiChange(datos.dui);         campos.push(`DUI: ${datos.dui}`); }
+            if (datos.nombre && !nombre) { handleNombreChange(datos.nombre);   campos.push(`Nombre: ${datos.nombre}`); }
+            if (datos.apellido && !apellido) { handleApellidoChange(datos.apellido); campos.push(`Apellido: ${datos.apellido}`); }
+            Alert.alert(
+              campos.length > 0 ? '✅ Datos detectados' : '⚠️ Sin datos',
+              campos.length > 0 ? campos.join('\n') : 'Asegúrate de enfocar bien el frente del DUI.'
+            );
           }
-        } else {
-          setDuiReverso(imageFile);
-          setReversoError('');
-        }
+        } catch (e) { console.warn('OCR error:', e.message); }
+        finally { setScanningOcr(false); }
       }
-    } catch (error) {
-      Alert.alert('Error', 'No se pudo tomar la foto. Intenta de nuevo.');
+    } catch (e) {
+      Alert.alert('Error', 'No se pudo abrir la cámara.');
+    }
+  };
+
+  // ==================== FOTOS DUI ====================
+  const tomarFotoDui = async (side) => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') { Alert.alert('Permiso requerido', 'Necesitamos acceso a la cámara.'); return; }
+      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.8 });
+      if (!result.canceled && result.assets?.[0]) {
+        const imageFile = { uri: result.assets[0].uri, name: `dui_${side}_${Date.now()}.jpg`, type: 'image/jpeg' };
+        if (side === 'frente') { setDuiFrente(imageFile); setFrenteError(''); }
+        else                   { setDuiReverso(imageFile); setReversoError(''); }
+      }
+    } catch (e) { Alert.alert('Error', 'No se pudo tomar la foto.'); }
+  };
+
+  // ==================== FOTO DE CASA ====================
+  const tomarFotoCasa = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso requerido', 'Necesitamos acceso a la cámara.');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.8 });
+      if (!result.canceled && result.assets?.[0]) {
+        setFotoCasa({
+          uri: result.assets[0].uri,
+          name: `casa_${Date.now()}.jpg`,
+          type: 'image/jpeg',
+        });
+      }
+    } catch (e) {
+      Alert.alert('Error', 'No se pudo tomar la foto.');
     }
   };
 
@@ -218,21 +222,9 @@ export default function CrearClienteScreen({ navigation }) {
       formData.append('latitud', latitud.trim());
       formData.append('longitud', longitud.trim());
       
-      // IMPORTANTE: Adjuntar las imágenes en el formato correcto
-      if (duiFrente) {
-        appendImageToFormData(formData, 'dui_foto_frente', duiFrente);
-      }
-      
-      if (duiReverso) {
-        appendImageToFormData(formData, 'dui_foto_reverso', duiReverso);
-      }
-      
-      // Debug: Ver qué se está enviando
-      console.log('📤 Enviando formulario...');
-      console.log('Nombre:', nombre);
-      console.log('DUI:', dui);
-      console.log('Foto frente:', duiFrente?.name || 'No');
-      console.log('Foto reverso:', duiReverso?.name || 'No');
+      if (duiFrente)  appendImageToFormData(formData, 'dui_foto_frente', duiFrente);
+      if (duiReverso) appendImageToFormData(formData, 'dui_foto_reverso', duiReverso);
+      if (fotoCasa)   appendImageToFormData(formData, 'foto_casa', fotoCasa);
       
       // Enviar al servidor (multipart/form-data para que axios incluya las imágenes correctamente)
       const response = await api.post('/clientes', formData, {
@@ -273,8 +265,9 @@ export default function CrearClienteScreen({ navigation }) {
             telefono_whatsapp: telefonoWhatsapp.trim(),
             latitud: latitud.trim(),
             longitud: longitud.trim(),
-            dui_foto_frente: duiFrente,
-            dui_foto_reverso: duiReverso,
+            ...(duiFrente  && { dui_foto_frente:  duiFrente }),
+            ...(duiReverso && { dui_foto_reverso: duiReverso }),
+            ...(fotoCasa   && { foto_casa:         fotoCasa }),
           },
         });
 
@@ -323,15 +316,9 @@ export default function CrearClienteScreen({ navigation }) {
       setLongError('Requerido');
       valid = false;
     }
-    if (!duiFrente) {
-      setFrenteError('Necesitas tomar la foto del frente');
-      valid = false;
-    }
-    if (!duiReverso) {
-      setReversoError('Necesitas tomar la foto del reverso');
-      valid = false;
-    }
-    
+    if (!duiFrente)  { setFrenteError('Toma la foto del frente del DUI');   valid = false; }
+    if (!duiReverso) { setReversoError('Toma la foto del reverso del DUI'); valid = false; }
+
     return valid;
   };
 
@@ -505,66 +492,77 @@ export default function CrearClienteScreen({ navigation }) {
         </TouchableOpacity>
       </View>
 
+      {/* Escanear DUI */}
+      <View style={s.card}>
+        <View style={s.cardHeader}>
+          <Text style={s.cardTitle}>🪪 Escanear DUI</Text>
+          <Text style={s.cardRequired}>Opcional</Text>
+        </View>
+        <TouchableOpacity
+          style={[s.locationBtn, scanningOcr && s.locationBtnLoading]}
+          onPress={escanearDui}
+          disabled={scanningOcr}
+        >
+          <Text style={s.locationBtnText}>
+            {scanningOcr ? '⏳ Escaneando...' : '📷 Escanear DUI (auto-rellenar)'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Fotos del DUI */}
       <View style={s.card}>
         <View style={s.cardHeader}>
-          <Text style={s.cardTitle}>📸 Fotos del DUI</Text>
+          <Text style={s.cardTitle}>🪪 Fotos del DUI</Text>
           <Text style={s.cardRequired}>* Ambos lados</Text>
         </View>
-
         <View style={s.photoGrid}>
-          <TouchableOpacity
-            style={[s.photoCard, duiFrente && s.photoCardDone]}
-            onPress={() => tomarFoto('frente')}
-          >
+          <TouchableOpacity style={[s.photoCard, duiFrente && s.photoCardDone]} onPress={() => tomarFotoDui('frente')}>
             <Text style={s.photoCardIcon}>{duiFrente ? '✓' : '📸'}</Text>
             <Text style={s.photoCardText}>{duiFrente ? 'Frente\ntomado' : 'Tomar\nfrente'}</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[s.photoCard, duiReverso && s.photoCardDone]}
-            onPress={() => tomarFoto('reverso')}
-          >
+          <TouchableOpacity style={[s.photoCard, duiReverso && s.photoCardDone]} onPress={() => tomarFotoDui('reverso')}>
             <Text style={s.photoCardIcon}>{duiReverso ? '✓' : '📸'}</Text>
             <Text style={s.photoCardText}>{duiReverso ? 'Reverso\ntomado' : 'Tomar\nreverso'}</Text>
           </TouchableOpacity>
         </View>
-
-        {(frenteError || reversoError) ? (
-          <Text style={s.errorText}>{frenteError || reversoError}</Text>
-        ) : null}
+        {(frenteError || reversoError) && <Text style={s.errorText}>{frenteError || reversoError}</Text>}
+        {(duiFrente || duiReverso) && (
+          <View style={s.previewContainer}>
+            {duiFrente && (
+              <TouchableOpacity onPress={() => { setPreviewImage(duiFrente.uri); setPreviewVisible(true); }} style={s.previewItem}>
+                <Image source={{ uri: duiFrente.uri }} style={s.previewImage} />
+                <Text style={s.previewLabel}>Frente</Text>
+              </TouchableOpacity>
+            )}
+            {duiReverso && (
+              <TouchableOpacity onPress={() => { setPreviewImage(duiReverso.uri); setPreviewVisible(true); }} style={s.previewItem}>
+                <Image source={{ uri: duiReverso.uri }} style={s.previewImage} />
+                <Text style={s.previewLabel}>Reverso</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
       </View>
-      
-      {/* Previsualización de imágenes */}
-      {(duiFrente || duiReverso) && (
-        <View style={s.previewContainer}>
-          {duiFrente && (
-            <TouchableOpacity 
-              onPress={() => {
-                setPreviewImage(duiFrente.uri);
-                setPreviewVisible(true);
-              }}
-              style={s.previewItem}
-            >
-              <Image source={{ uri: duiFrente.uri }} style={s.previewImage} />
-              <Text style={s.previewLabel}>Frente</Text>
-            </TouchableOpacity>
-          )}
-          
-          {duiReverso && (
-            <TouchableOpacity 
-              onPress={() => {
-                setPreviewImage(duiReverso.uri);
-                setPreviewVisible(true);
-              }}
-              style={s.previewItem}
-            >
-              <Image source={{ uri: duiReverso.uri }} style={s.previewImage} />
-              <Text style={s.previewLabel}>Reverso</Text>
-            </TouchableOpacity>
-          )}
+
+      {/* Foto de la casa */}
+      <View style={s.card}>
+        <View style={s.cardHeader}>
+          <Text style={s.cardTitle}>🏠 Foto de la casa</Text>
+          <Text style={s.cardRequired}>Opcional</Text>
         </View>
-      )}
+        <TouchableOpacity
+          style={[s.photoCard, fotoCasa && s.photoCardDone]}
+          onPress={tomarFotoCasa}
+        >
+          <Text style={s.photoCardIcon}>{fotoCasa ? '✓' : '📸'}</Text>
+          <Text style={s.photoCardText}>{fotoCasa ? 'Foto tomada\n(toca para cambiar)' : 'Tomar foto\nde la casa'}</Text>
+        </TouchableOpacity>
+        {fotoCasa && (
+          <TouchableOpacity onPress={() => { setPreviewImage(fotoCasa.uri); setPreviewVisible(true); }} style={s.previewItem}>
+            <Image source={{ uri: fotoCasa.uri }} style={s.previewImage} />
+          </TouchableOpacity>
+        )}
+      </View>
 
       {/* Botón submit */}
       <TouchableOpacity

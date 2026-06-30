@@ -6,7 +6,10 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import api from '../services/api';
 import { useConnectivity } from '../services/connectivity';
-import { guardarRutaCache, leerRutaCache, contarPagosPendientes, sincronizarPagosPendientes } from '../services/cobrosOffline';
+import {
+  guardarRutaCache, leerRutaCache, contarPagosPendientes, sincronizarPagosPendientes,
+  guardarOrdenClientes, leerOrdenClientes, leerClientesVisitadosHoy,
+} from '../services/cobrosOffline';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
@@ -24,6 +27,8 @@ export default function CobrosScreen({ navigation }) {
   const [rutaId,   setRutaId]   = useState(null);
   const [esCache,  setEsCache]  = useState(false);
   const [pagosPend,setPagosPend]= useState(0);
+  const [ordenIds, setOrdenIds] = useState([]);
+  const [visitadosIds, setVisitadosIds] = useState([]);
   const { isOnline } = useConnectivity();
 
   const cargar = useCallback(async () => {
@@ -70,11 +75,24 @@ export default function CobrosScreen({ navigation }) {
     setLoading(true);
     cargar();
     contarPagosPendientes().then(setPagosPend);
+    leerOrdenClientes().then(setOrdenIds);
+    leerClientesVisitadosHoy().then(setVisitadosIds);
   }, [cargar]));
 
-  const todos = useMemo(() =>
-    rutas.flatMap(r => (r.clientes||[]).map(c => ({ ...c, rutaNombre: r.nombre, rutaId: r.id }))),
-  [rutas]);
+  const todos = useMemo(() => {
+    const visitadosSet = new Set(visitadosIds);
+    const base = rutas
+      .flatMap(r => (r.clientes||[]).map(c => ({ ...c, rutaNombre: r.nombre, rutaId: r.id })))
+      .filter(c => !visitadosSet.has(c.id)); // ya gestionado hoy (pago o visita) → fuera de la lista
+    if (!ordenIds.length) return base;
+    // Aplica el orden guardado por el cobrador; clientes nuevos (sin orden) van al final
+    const posicion = new Map(ordenIds.map((id, i) => [id, i]));
+    return [...base].sort((a, b) => {
+      const pa = posicion.has(a.id) ? posicion.get(a.id) : Infinity;
+      const pb = posicion.has(b.id) ? posicion.get(b.id) : Infinity;
+      return pa - pb;
+    });
+  }, [rutas, ordenIds, visitadosIds]);
 
   const lista = useMemo(() => {
     let arr = rutaId ? todos.filter(c => c.rutaId === rutaId) : todos;
@@ -89,6 +107,34 @@ export default function CobrosScreen({ navigation }) {
     return arr;
   }, [todos, query, rutaId]);
 
+  const puedeOrdenar = !query.trim();
+
+  // Mueve un cliente una posición arriba o abajo dentro de la lista visible
+  // actual, y persiste el nuevo orden completo (incluyendo clientes de otras
+  // rutas no visibles en este momento).
+  const moverCliente = useCallback(async (clienteId, direccion) => {
+    const idx = lista.findIndex(c => c.id === clienteId);
+    if (idx === -1) return;
+    const nuevoIdx = idx + direccion;
+    if (nuevoIdx < 0 || nuevoIdx >= lista.length) return;
+
+    const visibleReordenado = [...lista];
+    [visibleReordenado[idx], visibleReordenado[nuevoIdx]] = [visibleReordenado[nuevoIdx], visibleReordenado[idx]];
+    const nuevosIds = visibleReordenado.map(c => c.id);
+    const nuevosSet = new Set(nuevosIds);
+    let cursor = 0;
+    const ordenCompleto = todos.map(c => {
+      if (nuevosSet.has(c.id)) {
+        const id = nuevosIds[cursor];
+        cursor++;
+        return id;
+      }
+      return c.id;
+    });
+    setOrdenIds(ordenCompleto);
+    await guardarOrdenClientes(ordenCompleto);
+  }, [lista, todos]);
+
   const totalClientes = todos.length;
   const totalRutas    = rutas.length;
 
@@ -97,77 +143,94 @@ export default function CobrosScreen({ navigation }) {
     const vencTotal = (c.ventas||[]).reduce((s,v)=>s+(v.cuotas_vencidas||0),0);
     const ventasAct = (c.ventas||[]).length;
     return (
-      <View style={s.card}>
-        {/* Top row */}
-        <View style={s.cardTop}>
-          <View style={[s.avatar, { backgroundColor: color }]}>
-            <Text style={s.avatarTxt}>{initials(c.nombre)}</Text>
+        <View style={s.card}>
+          {/* Top row */}
+          <View style={s.cardTop}>
+            <View style={[s.avatar, { backgroundColor: color }]}>
+              <Text style={s.avatarTxt}>{initials(c.nombre)}</Text>
+            </View>
+            <View style={s.cardInfo}>
+              <Text style={s.cardNombre} numberOfLines={1}>{c.nombre}</Text>
+              <View style={s.cardMeta}>
+                {c.codigo_anterior ? <Text style={s.metaTxt}>Código: {c.codigo_anterior}</Text> : null}
+                {c.codigo_anterior && c.telefono ? <Text style={s.metaDot}>|</Text> : null}
+                {c.telefono ? <Text style={s.metaTxt}>Tel: {c.telefono}</Text> : null}
+              </View>
+            </View>
+            {puedeOrdenar && (
+              <View style={s.ordenBtns}>
+                <TouchableOpacity
+                  style={[s.ordenBtn, index === 0 && s.ordenBtnDisabled]}
+                  onPress={() => moverCliente(c.id, -1)}
+                  disabled={index === 0}
+                  hitSlop={{top:6,bottom:6,left:6,right:6}}
+                >
+                  <Text style={s.ordenBtnTxt}>▲</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[s.ordenBtn, index === lista.length - 1 && s.ordenBtnDisabled]}
+                  onPress={() => moverCliente(c.id, 1)}
+                  disabled={index === lista.length - 1}
+                  hitSlop={{top:6,bottom:6,left:6,right:6}}
+                >
+                  <Text style={s.ordenBtnTxt}>▼</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
-          <View style={s.cardInfo}>
-            <Text style={s.cardNombre} numberOfLines={1}>{c.nombre}</Text>
-            <View style={s.cardMeta}>
-              {c.codigo_anterior ? <Text style={s.metaTxt}>Código: {c.codigo_anterior}</Text> : null}
-              {c.codigo_anterior && c.telefono ? <Text style={s.metaDot}>|</Text> : null}
-              {c.telefono ? <Text style={s.metaTxt}>Tel: {c.telefono}</Text> : null}
+
+          {/* Stats row */}
+          <View style={s.statsRow}>
+            <View style={s.statBox}>
+              <Text style={s.statLabel}>Saldo total</Text>
+              <Text style={[s.statVal, {color:'#e53e3e'}]}>{fmt(c.saldo_total)}</Text>
+            </View>
+            <View style={s.statBox}>
+              <Text style={s.statLabel}>Cuotas vencidas</Text>
+              <Text style={[s.statVal, {color:'#F5A623'}]}>{c.cuotas_vencidas}</Text>
+            </View>
+            <View style={s.statBox}>
+              <Text style={s.statLabel}>Para estar al día</Text>
+              <Text style={[s.statVal, {color:'#F5A623'}]}>{fmt(c.para_estar_al_dia)}</Text>
             </View>
           </View>
-          <TouchableOpacity style={s.menuBtn}>
-            <Text style={s.menuDots}>⋮</Text>
-          </TouchableOpacity>
-        </View>
 
-        {/* Stats row */}
-        <View style={s.statsRow}>
-          <View style={s.statBox}>
-            <Text style={s.statLabel}>Saldo total</Text>
-            <Text style={[s.statVal, {color:'#e53e3e'}]}>{fmt(c.saldo_total)}</Text>
+          {/* Badges */}
+          <View style={s.badgesRow}>
+            {ventasAct > 0 && (
+              <View style={[s.badge, {backgroundColor:'#e3f2fd'}]}>
+                <Text style={[s.badgeTxt, {color:'#1565C0'}]}>🗓 {ventasAct} venta{ventasAct>1?'s':''} activa{ventasAct>1?'s':''}</Text>
+              </View>
+            )}
+            {vencTotal > 0 && (
+              <View style={[s.badge, {backgroundColor:'#fce4ec'}]}>
+                <Text style={[s.badgeTxt, {color:'#c62828'}]}>⚠️ {vencTotal} vencida{vencTotal>1?'s':''}</Text>
+              </View>
+            )}
           </View>
-          <View style={s.statBox}>
-            <Text style={s.statLabel}>Cuotas vencidas</Text>
-            <Text style={[s.statVal, {color:'#F5A623'}]}>{c.cuotas_vencidas}</Text>
-          </View>
-          <View style={s.statBox}>
-            <Text style={s.statLabel}>Para estar al día</Text>
-            <Text style={[s.statVal, {color:'#F5A623'}]}>{fmt(c.para_estar_al_dia)}</Text>
-          </View>
-        </View>
 
-        {/* Badges */}
-        <View style={s.badgesRow}>
-          {ventasAct > 0 && (
-            <View style={[s.badge, {backgroundColor:'#e3f2fd'}]}>
-              <Text style={[s.badgeTxt, {color:'#1565C0'}]}>🗓 {ventasAct} venta{ventasAct>1?'s':''} activa{ventasAct>1?'s':''}</Text>
-            </View>
-          )}
-          {vencTotal > 0 && (
-            <View style={[s.badge, {backgroundColor:'#fce4ec'}]}>
-              <Text style={[s.badgeTxt, {color:'#c62828'}]}>⚠️ {vencTotal} vencida{vencTotal>1?'s':''}</Text>
-            </View>
-          )}
+          {/* Botones */}
+          <View style={s.btnsRow}>
+            <TouchableOpacity
+              style={s.btnOutline}
+              onPress={() => navigation.navigate('DetalleCliente', { clienteId: c.id, clienteNombre: c.nombre })}
+            >
+              <Text style={s.btnOutlineTxt}>Ver detalle</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={s.btnSolid}
+              onPress={() => navigation.navigate('RegistrarPago', {
+                cliente: c,
+                ventaId: c.ventas?.[0]?.id||null,
+                ventaNumero: c.ventas?.[0]?.numero_venta||null,
+                saldoPendiente: c.ventas?.[0]?.saldo_pendiente||c.saldo_total,
+                cuotasVencidas: vencTotal,
+              })}
+            >
+              <Text style={s.btnSolidTxt}>Cobrar</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-
-        {/* Botones */}
-        <View style={s.btnsRow}>
-          <TouchableOpacity
-            style={s.btnOutline}
-            onPress={() => navigation.navigate('DetalleCliente', { clienteId: c.id, clienteNombre: c.nombre })}
-          >
-            <Text style={s.btnOutlineTxt}>Ver detalle</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={s.btnSolid}
-            onPress={() => navigation.navigate('RegistrarPago', {
-              cliente: c,
-              ventaId: c.ventas?.[0]?.id||null,
-              ventaNumero: c.ventas?.[0]?.numero_venta||null,
-              saldoPendiente: c.ventas?.[0]?.saldo_pendiente||c.saldo_total,
-              cuotasVencidas: vencTotal,
-            })}
-          >
-            <Text style={s.btnSolidTxt}>Cobrar</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
     );
   };
 
@@ -193,12 +256,17 @@ export default function CobrosScreen({ navigation }) {
             <Text style={s.headerTitle}>Cobros</Text>
             <Text style={s.headerSub}>Ruta de hoy · <Text style={{textTransform:'capitalize'}}>{dia}</Text></Text>
           </View>
-          <TouchableOpacity
-            style={s.mapBtn}
-            onPress={() => navigation.navigate('MapaCobros', { clientes: todos })}
-          >
-            <Text style={s.mapBtnTxt}>🗺️  Mapa</Text>
-          </TouchableOpacity>
+          <View style={s.headerBtns}>
+            <TouchableOpacity style={s.mapBtn} onPress={() => navigation.navigate('Home')}>
+              <Text style={s.mapBtnTxt}>🏠</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.mapBtn} onPress={() => navigation.navigate('HistorialDia')}>
+              <Text style={s.mapBtnTxt}>📋</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.mapBtn} onPress={() => navigation.navigate('MapaCobros', { clientes: todos })}>
+              <Text style={s.mapBtnTxt}>🗺️</Text>
+            </TouchableOpacity>
+          </View>
         </View>
         <View style={s.chipsRow}>
           <View style={s.chip}><Text style={s.chipTxt}>📍 {totalRutas} ruta{totalRutas!==1?'s':''}</Text></View>
@@ -268,6 +336,7 @@ export default function CobrosScreen({ navigation }) {
           {/* Contador */}
           <Text style={s.countTxt}>
             {lista.length} cliente{lista.length!==1?'s':''}{query?` · "${query}"`:''}
+            {puedeOrdenar && lista.length > 1 ? '  ·  ▲▼ para ordenar' : ''}
           </Text>
 
           <FlatList
@@ -300,8 +369,9 @@ const s = StyleSheet.create({
     paddingHorizontal: 20,
   },
   headerContent: { flexDirection:'row', justifyContent:'space-between', alignItems:'flex-start', marginBottom:14 },
+  headerBtns:{ flexDirection:'row', gap:8 },
   mapBtn:    { backgroundColor:'rgba(255,255,255,0.2)', borderRadius:20, paddingHorizontal:14, paddingVertical:8, borderWidth:1, borderColor:'rgba(255,255,255,0.4)' },
-  mapBtnTxt: { color:'#fff', fontSize:13, fontWeight:'700' },
+  mapBtnTxt: { color:'#fff', fontSize:16 },
   headerTitle: { color:'#fff', fontSize:30, fontWeight:'800' },
   headerSub:   { color:'rgba(255,255,255,0.75)', fontSize:13, marginTop:2 },
   chipsRow:    { flexDirection:'row', gap:8 },
@@ -345,6 +415,10 @@ const s = StyleSheet.create({
   metaDot:   { color:'#ccc', fontSize:12 },
   menuBtn:   { padding:4 },
   menuDots:  { fontSize:22, color:'#bbb' },
+  ordenBtns: { flexDirection:'column', gap:2, marginLeft:4 },
+  ordenBtn:  { padding:6, backgroundColor:'#f0f0f0', borderRadius:6, alignItems:'center' },
+  ordenBtnDisabled:{ opacity:0.3 },
+  ordenBtnTxt:{ fontSize:12, color:'#1565C0', fontWeight:'800' },
 
   statsRow:  { flexDirection:'row', marginHorizontal:16, marginBottom:10, backgroundColor:'#f8f9fc', borderRadius:10 },
   statBox:   { flex:1, alignItems:'center', paddingVertical:10 },

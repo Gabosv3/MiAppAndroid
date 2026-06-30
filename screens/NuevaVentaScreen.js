@@ -19,6 +19,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 import * as localDb from '../services/localDb';
+import { guardarAsignacionCache, leerAsignacionCache } from '../services/localDb';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -89,6 +90,7 @@ export default function NuevaVentaScreen({ navigation }) {
   const [cliente, setCliente] = useState({ id: null, nombre: 'Consumidor Final' });
   const [descuento, setDescuento] = useState('');
   const [pago, setPago] = useState('');
+  const [usarPrima, setUsarPrima] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [printerModalVisible, setPrinterModalVisible] = useState(false);
@@ -105,12 +107,15 @@ export default function NuevaVentaScreen({ navigation }) {
     const descVal = parseFloat(descuento) || 0;
     const descPct = subtotal > 0 ? (descVal / subtotal) * 100 : 0;
     const total = Math.max(0, subtotal - descVal);
-    const pagoVal = parseFloat(pago) || 0;
+    const pagoVal = (usarPrima || tipoPago === 'contado') ? (parseFloat(pago) || 0) : 0;
     const vuelto = Math.max(0, pagoVal - total);
-    const tipoPago = carrito.some(i => Number(i.cuotas) > 0) ? 'credito' : 'contado';
-    
-    return { subtotal, descVal, descPct, total, pagoVal, vuelto, tipoPago };
-  }, [carrito, descuento, pago]);
+    const anyCredito = carrito.some(i => Number(i.cuotas) > 0);
+    const allCredito = carrito.length > 0 && carrito.every(i => Number(i.cuotas) > 0);
+    const tipoPago = anyCredito ? 'credito' : 'contado';
+    const esMixto = anyCredito && !allCredito;
+
+    return { subtotal, descVal, descPct, total, pagoVal, vuelto, tipoPago, esMixto };
+  }, [carrito, descuento, pago, usarPrima]);
 
   // ── Cargar categorías ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -202,24 +207,24 @@ export default function NuevaVentaScreen({ navigation }) {
         const planEnabled = Number(d.cuotas || 0) > 0 && Number(d.precio_cuota || 0) > 0;
         const cambioPrecioVendedor = String(d.planLabel || '').toLowerCase().includes('cambio de precio');
 
-        let priceText = `<div style="font-size:14px; margin-top:4px;">Precio: ${fmt(priceNormal)}</div>`;
+        let priceText = `<div style="font-size:12px; margin-top:3px;">Precio: ${fmt(priceNormal)}</div>`;
         let planText = '';
 
         if (planEnabled) {
-          priceText = `<div style="font-size:14px; margin-top:4px;">Precio cuota: ${fmt(d.precio_cuota)}</div>`;
-          planText = `<div style="margin-top:8px; font-size:14px; font-weight:700;">Plan de financiamiento:</div><div style="font-size:14px;">${d.cuotas} cuotas de ${fmt(d.precio_cuota)}</div>`;
+          priceText = `<div style="font-size:12px; margin-top:3px;">Precio cuota: ${fmt(d.precio_cuota)}</div>`;
+          planText = `<div style="margin-top:4px; font-size:12px; font-weight:700;">Plan de financiamiento:</div><div style="font-size:12px;">${d.cuotas} cuotas de ${fmt(d.precio_cuota)}</div>`;
         } else if (cambioPrecioVendedor) {
-          priceText = `<div style="font-size:14px; margin-top:4px;">Precio vendedor: ${fmt(priceNormal)}</div>`;
+          priceText = `<div style="font-size:12px; margin-top:3px;">Precio vendedor: ${fmt(priceNormal)}</div>`;
         }
 
         return `
-          <div style="margin-bottom:12px;">
-            <div style="font-size:16px; font-weight:700;">${name}</div>
-            <div style="font-size:14px; margin-top:4px; color:#555">Cantidad: ${qty}</div>
+          <div style="margin-bottom:8px;">
+            <div style="font-size:13px; font-weight:700;">${name}</div>
+            <div style="font-size:12px; margin-top:3px; color:#555">Cantidad: ${qty}</div>
             ${priceText}
             ${planText}
           </div>
-          <div style="border-top:1px dashed #555; margin:10px 0"></div>
+          <div style="border-top:1px dashed #555; margin:8px 0"></div>
         `;
       }).join('');
 
@@ -228,55 +233,61 @@ export default function NuevaVentaScreen({ navigation }) {
         <head>
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
           <style>
-            body{ font-family: Arial, Helvetica, sans-serif; font-size:18px; width:360px; margin:0; padding:16px }
-            h3{ margin:0; font-size:26px }
+            * { box-sizing: border-box; }
+            body{ font-family: Arial, Helvetica, sans-serif; font-size:14px; width:100%; max-width:380px; margin:0 auto; padding:12px; }
+            h3{ margin:0; font-size:22px }
             .center{ text-align:center }
             .right{ text-align:right }
-            .small{ font-size:15px; color:#555 }
-            .label{ font-size:16px; font-weight:700 }
-            .divider{ border-top:2px dashed #333; margin:16px 0 }
-            .section-title{ font-size:16px; font-weight:700; margin-bottom:10px }
-            .text-sm{ font-size:15px; }
-            .product-name{ font-size:18px; font-weight:700; }
-            td{ vertical-align: top; padding: 6px 0; font-size: 15px; }
-            table{ width: 100%; border-collapse: collapse; }
+            .small{ font-size:13px; color:#555 }
+            .label{ font-size:14px; font-weight:700 }
+            .divider{ border-top:2px dashed #333; margin:12px 0 }
+            .section-title{ font-size:14px; font-weight:700; margin-bottom:8px }
+            .text-sm{ font-size:13px; }
+            .product-name{ font-size:15px; font-weight:700; }
+            td{ vertical-align: top; padding: 4px 2px; font-size: 13px; word-break: break-word; }
+            table{ width: 100%; border-collapse: collapse; table-layout: fixed; }
+            td:first-child{ width: 60%; }
+            td:last-child{ width: 40%; text-align: right; }
           </style>
         </head>
         <body>
           ${logoHtml}
           <div class="center">
-            <div style="font-size:32px; font-weight:800; margin-bottom:8px">DISTRIBUIDORA BM</div>
-            <div style="font-size:17px; margin-bottom:4px; color:#555">Muebles • Electrodomésticos</div>
+            <div style="font-size:22px; font-weight:800; margin-bottom:6px">DISTRIBUIDORA BM</div>
+            <div style="font-size:13px; margin-bottom:4px; color:#555">Muebles • Electrodomésticos</div>
           </div>
-          <div style="font-size:15px; margin-top:10px; line-height:22px; color:#555">
+          <div style="font-size:12px; margin-top:8px; line-height:18px; color:#555">
             Teléfono: +503 7777-7777<br />
             WhatsApp: +503 7777-7777<br />
             Correo: ventas@bmdistribuidora.com<br />
             Web: www.bmdistribuidora.com
           </div>
-          <div style="font-size:14px; margin-top:10px; color:#555">Dirección:<br />Usulután, El Salvador</div>
+          <div style="font-size:12px; margin-top:8px; color:#555">Dirección:<br />Usulután, El Salvador</div>
           <div class="divider"></div>
-          <div style="font-size:16px; font-weight:700; text-align:center; margin-bottom:10px">━ TICKET DE VENTA ━</div>
-          <div style="font-size:14px; margin-bottom:4px"><strong>Venta No:</strong> ${ventaNumero}</div>
-          <div style="font-size:14px; margin-bottom:4px"><strong>Fecha:</strong> ${escapeHtml(date)}</div>
-          <div style="font-size:14px; margin-bottom:4px"><strong>Caja:</strong> ${cajaNombre}</div>
-          <div style="font-size:14px; margin-bottom:4px"><strong>Sucursal:</strong> ${sucursalNombre}</div>
-          <div style="font-size:14px; margin-top:8px"><strong>Vendedor:</strong><br />${vendedorNombre}</div>
-          <div style="font-size:14px; margin-top:8px"><strong>Cliente:</strong><br />${escapeHtml(clienteNombre)}</div>
+          <div style="font-size:14px; font-weight:700; text-align:center; margin-bottom:8px">━ TICKET DE VENTA ━</div>
+          <div style="font-size:12px; margin-bottom:3px"><strong>Venta No:</strong> ${ventaNumero}</div>
+          <div style="font-size:12px; margin-bottom:3px"><strong>Fecha:</strong> ${escapeHtml(date)}</div>
+          <div style="font-size:12px; margin-bottom:3px"><strong>Caja:</strong> ${cajaNombre}</div>
+          <div style="font-size:12px; margin-bottom:3px"><strong>Sucursal:</strong> ${sucursalNombre}</div>
+          <div style="font-size:12px; margin-top:6px"><strong>Vendedor:</strong> ${vendedorNombre}</div>
+          <div style="font-size:12px; margin-top:4px"><strong>Cliente:</strong> ${escapeHtml(clienteNombre)}</div>
           <div class="divider"></div>
           <div style="font-size:16px; font-weight:700; margin-bottom:10px">PRODUCTOS</div>
           ${itemsHtml}
           <div class="divider"></div>
           <table>
-            <tr><td>Subtotal</td><td class="right" style="font-weight:600">${fmt(totals.subtotal)}</td></tr>
-            <tr><td>Descuento</td><td class="right" style="font-weight:600">${fmt(totals.descVal)}</td></tr>
-            <tr><td style="font-size:18px; font-weight:800"><strong>TOTAL</strong></td><td class="right" style="font-size:18px; font-weight:800">${fmt(totals.total)}</td></tr>
+            <tr><td style="font-size:13px">Subtotal</td><td style="text-align:right;font-weight:600;font-size:13px">${fmt(totals.subtotal)}</td></tr>
+            <tr><td style="font-size:13px">Descuento</td><td style="text-align:right;font-weight:600;font-size:13px">${fmt(totals.descVal)}</td></tr>
+            <tr><td style="font-size:16px;font-weight:800"><strong>TOTAL</strong></td><td style="text-align:right;font-size:16px;font-weight:800">${fmt(totals.total)}</td></tr>
           </table>
           <div class="divider"></div>
-          <div style="font-size:14px; margin-bottom:6px"><strong>Forma de pago:</strong><br />${escapeHtml(tipoPagoLabel)}</div>
+          <div style="font-size:13px; margin-bottom:6px"><strong>Forma de pago:</strong> ${escapeHtml(tipoPagoLabel)}</div>
           <table>
-            <tr><td>Pago recibido</td><td class="right" style="font-weight:600">${fmt(totals.pagoVal)}</td></tr>
-            <tr><td>Vuelto</td><td class="right" style="font-weight:600">${fmt(totals.vuelto)}</td></tr>
+            ${totals.tipoPago === 'credito'
+              ? `<tr><td style="font-weight:700;font-size:13px">Prima inicial</td><td style="text-align:right;font-weight:800;font-size:14px">${totals.pagoVal > 0 ? fmt(totals.pagoVal) : 'Sin prima'}</td></tr>`
+              : `<tr><td style="font-size:13px">Pago recibido</td><td style="text-align:right;font-weight:600;font-size:13px">${fmt(totals.pagoVal)}</td></tr>
+                 <tr><td style="font-size:13px">Vuelto</td><td style="text-align:right;font-weight:600;font-size:13px">${fmt(totals.vuelto)}</td></tr>`
+            }
           </table>
           <div class="divider"></div>
           <div style="font-size:14px; font-weight:700; margin-bottom:6px">GARANTÍA Y CONSULTAS</div>
@@ -296,16 +307,7 @@ export default function NuevaVentaScreen({ navigation }) {
         </html>
       `;
 
-      const file = await Print.printToFileAsync({ html });
-      if (file?.uri) {
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(file.uri);
-        } else {
-          await Print.printAsync({ uri: file.uri });
-        }
-      } else {
-        await Print.printAsync({ html });
-      }
+      await Print.printAsync({ html });
     } catch (error) {
       console.error('Error printing ticket:', error);
       Alert.alert('Error', 'No se pudo imprimir el ticket');
@@ -380,17 +382,9 @@ export default function NuevaVentaScreen({ navigation }) {
 
       setAsignacionId(asignacion.id || null);
 
-      console.log('=== API ASIGNACION PRODUCTOS ===');
-      console.log('total productos:', asignacion.productos?.length);
-      if (asignacion.productos?.[0]) {
-        console.log('=== PRIMER PRODUCTO COMPLETO ===');
-        console.log(JSON.stringify(asignacion.productos[0], null, 2));
-      }
-
       const mapped = (asignacion.productos || []).map(p => {
         const stock_disponible = Number(p.cantidad_asignada ?? 0) - Number(p.cantidad_vendida ?? 0);
         const paymentPlans = normalizePaymentPlans(p.precios_cuotas || null);
-        console.log(`${p.nombre} → plans:`, JSON.stringify(paymentPlans));
 
         return {
           id: p.producto_id,
@@ -420,11 +414,16 @@ export default function NuevaVentaScreen({ navigation }) {
       ).values());
 
       setAsignMsg('');
-      console.log('=== PRODUCTOS DESPUÉS DEL MAPEO ===');
-      console.log('Primer producto mapeado:', JSON.stringify(mapped[0], null, 2));
-      console.log('Categorías encontradas:', uniqueCategories);
       setProductos(mapped);
       setCategorias(uniqueCategories);
+
+      // Guardar caché con fecha de hoy para uso offline
+      await guardarAsignacionCache({
+        productos: mapped,
+        categorias: uniqueCategories,
+        asignacionId: asignacion.id || null,
+        sucursalId: asignacion.sucursal_id || sucursalId,
+      });
     } catch (e) {
       const msg = e?.response?.data?.message || e?.message || String(e);
       const isOffline = !e.response || msg === 'Sin conexión con el servidor' || msg === 'Tiempo de espera agotado';
@@ -433,14 +432,15 @@ export default function NuevaVentaScreen({ navigation }) {
         setAsignMsg('No hay asignación activa para hoy');
         setProductos([]);
       } else if (isOffline) {
-        const productosLocales = await localDb.getLocalProducts();
-        if (Array.isArray(productosLocales) && productosLocales.length > 0) {
-          const detalles = productosLocales.map(p => ({ id: p.id, nombre: p.nombre, stock: p.stock_disponible }));
-          console.log(`📥 Cargados en NuevaVenta (offline): ${productosLocales.length}`, detalles);
-          setProductos(productosLocales);
-          setAsignMsg('Usando productos locales (sin conexión)');
+        // Usar caché de la asignación de HOY solamente
+        const cache = await leerAsignacionCache();
+        if (cache) {
+          setProductos(cache.productos);
+          setCategorias(cache.categorias || []);
+          setAsignacionId(cache.asignacionId);
+          setAsignMsg('Sin conexión — mostrando asignación de hoy guardada');
         } else {
-          setAsignMsg('Sin conexión y no hay datos locales');
+          setAsignMsg('Sin conexión y no hay asignación de hoy guardada.\nConéctate una vez para cargar la asignación del día.');
           setProductos([]);
         }
       } else {
@@ -466,7 +466,8 @@ export default function NuevaVentaScreen({ navigation }) {
     } catch (error) {
       const isOffline = !error.response || error.message === 'Sin conexión con el servidor' || error.message === 'Tiempo de espera agotado';
       if (isOffline) {
-        const clientesLocales = await localDb.getLocalClients();
+        // Offline: buscar en la BD local filtrado por query
+        const clientesLocales = await localDb.searchLocalClients(q);
         setClientes(Array.isArray(clientesLocales) ? clientesLocales : []);
       }
     }
@@ -480,12 +481,7 @@ export default function NuevaVentaScreen({ navigation }) {
 
   // ── Operaciones del carrito ───────────────────────────────────────────────
   const agregarProducto = useCallback((producto) => {
-    console.log('=== AGREGAR PRODUCTO ===');
-    console.log('nombre:', producto.nombre);
-    console.log('precios_cuotas RAW:', JSON.stringify(producto.precios_cuotas));
-
     const paymentPlans = normalizePaymentPlans(producto.precios_cuotas || producto.preciosCuotas || null);
-    console.log('paymentPlans normalizados:', JSON.stringify(paymentPlans));
 
     // Siempre mostrar modal de forma de pago (con o sin planes)
     setCuotasProduct({
@@ -661,13 +657,17 @@ export default function NuevaVentaScreen({ navigation }) {
       sucursal_id: sucursalId,
       tipo_pago: cartTotals.tipoPago,
       ...(cartTotals.tipoPago === 'credito' ? { dias_credito: 30 } : {}),
-      cliente_id: clienteId, // Siempre enviar cliente_id (0 para Consumidor Final)
+      cliente_id: clienteId,
+      ...(cartTotals.pagoVal > 0
+        ? cartTotals.tipoPago === 'credito'
+          ? { abono_inicial: cartTotals.pagoVal, prima: cartTotals.pagoVal }
+          : { pago_recibido: cartTotals.pagoVal }
+        : {}),
       ...(cartTotals.descPct > 0 ? { descuento_porcentaje: parseFloat(cartTotals.descPct.toFixed(4)) } : {}),
       ...(asignacionId ? { asignacion_id: asignacionId } : {}),
       detalles: carrito.map(i => {
-        // Si hay cuotas: precio_unitario = total del plan (cuotas × precio_cuota)
-        // Si es precio normal o vendedor: precio_venta ya tiene el precio correcto
-        const precio_unitario = i.cuotas && i.precio_cuota
+        const esCredito = Number(i.cuotas) > 0;
+        const precio_unitario = esCredito && i.precio_cuota
           ? Number(i.cuotas) * Number(i.precio_cuota)
           : parseFloat(i.precio_venta || 0);
 
@@ -676,8 +676,9 @@ export default function NuevaVentaScreen({ navigation }) {
           cantidad: i.cantidad,
           precio_unitario,
           descuento_porcentaje: 0,
+          tipo_pago: esCredito ? 'credito' : 'contado',
           ...(i.asignacion_detalle_id ? { asignacion_detalle_id: i.asignacion_detalle_id } : {}),
-          ...(i.cuotas ? { cuotas: Number(i.cuotas), precio_cuota: Number(i.precio_cuota) } : {}),
+          ...(esCredito ? { cuotas: Number(i.cuotas), precio_cuota: Number(i.precio_cuota) } : {}),
         };
       }),
     };
@@ -686,22 +687,17 @@ export default function NuevaVentaScreen({ navigation }) {
     
     try {
       const { data } = await api.post('/ventas', payload);
-      
-      Alert.alert(
-        '✅ Venta registrada',
-        `N° ${data.numero_venta}\nTotal: ${fmt(data.total)}\nVuelto: ${fmt(cartTotals.vuelto)}`,
-        [{ text: 'Nueva venta', onPress: limpiarVenta }]
-      );
 
-      // Imprimir ticket en segundo plano
-      (async () => {
-        try {
-          await printTicket(data, cartTotals, carrito);
-          await attemptEscPosPrint(data);
-        } catch (err) {
-          console.warn('Error en impresión:', err?.message || err);
-        }
-      })();
+      const carritoSnapshot = [...carrito];
+      const totalsSnapshot  = { ...cartTotals, clienteNombre: cliente.nombre };
+      limpiarVenta();
+
+      navigation.replace('VentaRegistrada', {
+        venta:           data,
+        carrito:         carritoSnapshot,
+        totals:          totalsSnapshot,
+        clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
+      });
       
     } catch (e) {
       const offlineError = !e.response || e.message === 'Sin conexión con el servidor' || e.message === 'Tiempo de espera agotado';
@@ -714,27 +710,21 @@ export default function NuevaVentaScreen({ navigation }) {
             data: payload,
           });
 
-          // Imprimir ticket incluso en modo offline con número temporal
-          (async () => {
-            try {
-              const tempTicketData = {
-                numero_venta: `TEMP-${Date.now()}`,
-                total: cartTotals.total,
-                subtotal: cartTotals.subtotal,
-                fecha_hora: new Date().toISOString(),
-              };
-              await printTicket(tempTicketData, cartTotals, carrito);
-              await attemptEscPosPrint(tempTicketData);
-            } catch (err) {
-              console.warn('Error imprimiendo ticket offline:', err?.message || err);
-            }
-          })();
-
-          Alert.alert(
-            '✔️ Venta guardada offline',
-            'No hay conexión. La venta se guardó localmente y se sincronizará cuando tengas internet.',
-            [{ text: 'Aceptar', onPress: limpiarVenta }]
-          );
+          const carritoSnap = [...carrito];
+          const totalsSnap  = { ...cartTotals, clienteNombre: cliente.nombre };
+          const tempData    = {
+            numero_venta: `OFFLINE-${Date.now()}`,
+            total: cartTotals.total,
+            subtotal: cartTotals.subtotal,
+            fecha_venta: new Date().toISOString(),
+          };
+          limpiarVenta();
+          navigation.replace('VentaRegistrada', {
+            venta:           tempData,
+            carrito:         carritoSnap,
+            totals:          totalsSnap,
+            clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
+          });
           return;
         } catch (queueError) {
           console.warn('Error guardando venta offline:', queueError);
@@ -787,6 +777,9 @@ export default function NuevaVentaScreen({ navigation }) {
           ]}>
             <Text style={{ fontSize: 9 }}>{isOnline ? '●' : '●'}</Text>
           </View>
+          <TouchableOpacity onPress={() => navigation.navigate('HistorialVentas')} style={[s.hBtn, { backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 6, paddingHorizontal: 8 }]}>
+            <Text style={[s.hIcon, { fontSize: 12 }]}>📋 Historial</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => navigation.goBack()} style={s.hBtn}>
             <Text style={[s.hIcon, { fontSize: 18 }]}>✕</Text>
           </TouchableOpacity>
@@ -976,6 +969,11 @@ export default function NuevaVentaScreen({ navigation }) {
                       <Text style={s.cartItemNom} numberOfLines={1}>{item.nombre}</Text>
                       <Text style={s.cartItemPrc}>{fmt(calcularTotalItem(item))}</Text>
                     </View>
+                    <View style={[s.itemTipoBadge, { backgroundColor: Number(item.cuotas) > 0 ? '#fff8e1' : '#e8f5e9' }]}>
+                      <Text style={[s.itemTipoBadgeTxt, { color: Number(item.cuotas) > 0 ? '#F5A623' : '#2e7d32' }]}>
+                        {Number(item.cuotas) > 0 ? 'Crédito' : 'Contado'}
+                      </Text>
+                    </View>
                     {item.precios_cuotas && Array.isArray(item.precios_cuotas) && item.precios_cuotas.length > 0 ? (
                       <TouchableOpacity onPress={() => abrirEditarPlan(item)}>
                         <Text style={{ fontSize: 11, color: colors.textMuted }}>
@@ -1037,26 +1035,51 @@ export default function NuevaVentaScreen({ navigation }) {
             </View>
           </View>
 
-          {/* Pago */}
+          {/* Pago / Prima */}
           <View style={s.pagoBox}>
-            <View style={s.pagoRow}>
-              <Text style={s.pagoLabel}>Pago</Text>
-              <TextInput
-                style={s.pagoInput}
-                value={pago}
-                onChangeText={setPago}
-                keyboardType="numeric"
-                placeholder="0.00"
-                placeholderTextColor={colors.textMuted}
-              />
-              <TouchableOpacity style={s.efectivoBtn} onPress={() => setPago(cartTotals.total.toFixed(2))}>
-                <Text style={s.efectivoBtnTxt}>Efectivo</Text>
+            {cartTotals.tipoPago === 'credito' && (
+              <TouchableOpacity
+                style={s.primaToggleRow}
+                onPress={() => { setUsarPrima(p => !p); if (usarPrima) setPago(''); }}
+                activeOpacity={0.7}
+              >
+                <View style={[s.toggleBox, usarPrima && { backgroundColor: '#F5A623', borderColor: '#F5A623' }]}>
+                  {usarPrima && <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>✓</Text>}
+                </View>
+                <Text style={[s.primaToggleTxt, usarPrima && { color: '#F5A623' }]}>
+                  {usarPrima ? 'Con prima inicial' : 'Sin prima'}
+                </Text>
               </TouchableOpacity>
-            </View>
-            <View style={s.totRow}>
-              <Text style={s.totLabel}>Vuelto</Text>
-              <Text style={[s.totVal, { color: '#4CAF50' }]}>{fmt(cartTotals.vuelto)}</Text>
-            </View>
+            )}
+            {(cartTotals.tipoPago === 'contado' || usarPrima) && (
+              <View style={s.pagoRow}>
+                <Text style={[s.pagoLabel, cartTotals.tipoPago === 'credito' && { color: '#F5A623', fontWeight: '700' }]}>
+                  {cartTotals.tipoPago === 'credito' ? 'Prima' : 'Pago'}
+                </Text>
+                <TextInput
+                  style={s.pagoInput}
+                  value={pago}
+                  onChangeText={setPago}
+                  keyboardType="numeric"
+                  placeholder="0.00"
+                  placeholderTextColor={colors.textMuted}
+                />
+                <TouchableOpacity style={s.efectivoBtn} onPress={() => setPago(cartTotals.total.toFixed(2))}>
+                  <Text style={s.efectivoBtnTxt}>{cartTotals.tipoPago === 'credito' ? 'Todo' : 'Efectivo'}</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {cartTotals.tipoPago === 'contado' && (
+              <View style={s.totRow}>
+                <Text style={s.totLabel}>Vuelto</Text>
+                <Text style={[s.totVal, { color: '#4CAF50' }]}>{fmt(cartTotals.vuelto)}</Text>
+              </View>
+            )}
+            {cartTotals.esMixto && (
+              <View style={s.mixtoInfo}>
+                <Text style={s.mixtoTxt}>⚡ Venta mixta: contado + crédito</Text>
+              </View>
+            )}
           </View>
 
           {/* Botón finalizar */}
@@ -1149,8 +1172,24 @@ export default function NuevaVentaScreen({ navigation }) {
                   <Text style={[{ color: colors.text, fontWeight: '700', fontSize: 16 }]}>Total</Text>
                   <Text style={{ color: colors.accent, fontWeight: '700', fontSize: 16 }}>${cartTotals.total.toFixed(2)}</Text>
                 </View>
-                {cartTotals.tipoPago === 'credito' && (
-                  <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 8 }}>Tipo: Crédito (30 días)</Text>
+                {cartTotals.tipoPago === 'credito' ? (
+                  <View style={[s.confirmTotalRow, { marginTop: 10, backgroundColor: '#fff8e1', borderRadius: 8, padding: 10 }]}>
+                    <Text style={{ color: '#7a5900', fontWeight: '700', fontSize: 13 }}>💰 Prima inicial</Text>
+                    <Text style={{ color: cartTotals.pagoVal > 0 ? '#F5A623' : '#aaa', fontWeight: '800', fontSize: 14 }}>
+                      {cartTotals.pagoVal > 0 ? fmt(cartTotals.pagoVal) : 'Sin prima'}
+                    </Text>
+                  </View>
+                ) : (
+                  <>
+                    <View style={s.confirmTotalRow}>
+                      <Text style={{ color: colors.textMuted }}>Pago recibido</Text>
+                      <Text style={{ color: colors.text }}>{fmt(cartTotals.pagoVal)}</Text>
+                    </View>
+                    <View style={s.confirmTotalRow}>
+                      <Text style={{ color: colors.textMuted }}>Vuelto</Text>
+                      <Text style={{ color: '#4CAF50', fontWeight: '700' }}>{fmt(cartTotals.vuelto)}</Text>
+                    </View>
+                  </>
                 )}
               </View>
             </ScrollView>
@@ -1207,7 +1246,7 @@ export default function NuevaVentaScreen({ navigation }) {
                   <TouchableOpacity
                     style={[s.clienteRow, { borderBottomColor: colors.border }]}
                     onPress={() => {
-                      setCliente({ id: item.id, nombre });
+                      setCliente({ id: item.id, nombre, whatsapp: item.whatsapp || item.telefono || null });
                       setShowClienteModal(false);
                       setBusquedaCliente('');
                     }}
@@ -1309,6 +1348,8 @@ const styles = (c) => StyleSheet.create({
   cartItemEmoji: { fontSize: 16, width: 22, marginRight: 5 },
   cartItemInfo:  { flex: 1, marginRight: 4, minWidth: 0 },
   cartItemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  itemTipoBadge:    { borderRadius: 4, paddingHorizontal: 4, paddingVertical: 1, alignSelf: 'flex-start', marginTop: 2 },
+  itemTipoBadgeTxt: { fontSize: 8, fontWeight: '700' },
   cartItemNom:   { fontSize: 10, color: c.text, fontWeight: '600', flexShrink: 1, flexBasis: 0, marginRight: 6, minWidth: 0 },
   cartItemPrc:   { fontSize: 10, color: c.accent, fontWeight: '700', flexShrink: 0 },
   qtyRow:        { flexDirection: 'row', alignItems: 'center' },
@@ -1333,6 +1374,12 @@ const styles = (c) => StyleSheet.create({
   pagoInput:      { flex: 1, fontSize: 11, color: c.text, borderWidth: 1, borderColor: c.border, borderRadius: 5, paddingHorizontal: 6, paddingVertical: 3, textAlign: 'right' },
   efectivoBtn:    { backgroundColor: c.surfaceAlt, borderRadius: 5, borderWidth: 1, borderColor: c.border, paddingHorizontal: 6, paddingVertical: 4 },
   efectivoBtnTxt: { fontSize: 10, color: c.text, fontWeight: '600' },
+
+  primaToggleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6, paddingVertical: 2 },
+  toggleBox: { width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: '#ccc', alignItems: 'center', justifyContent: 'center', marginRight: 6 },
+  primaToggleTxt: { fontSize: 11, color: '#aaa', fontWeight: '600' },
+  mixtoInfo: { backgroundColor: '#fff8e1', borderRadius: 6, padding: 5, marginTop: 4 },
+  mixtoTxt:  { fontSize: 10, color: '#7a5900', fontWeight: '600' },
 
   // Finalizar
   finalizarBtn: {

@@ -20,14 +20,14 @@
         "foregroundImage": "./assets/img/logo.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
       "package": "com.sidb.distribuidora"
     },
     "web": {
       "favicon": "./assets/img/logo.png"
     },
     "plugins": [
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-asset"
     ],
     "extra": {
       "EXPO_PUBLIC_API_URL": "https://panel.distribuidorabriancescomenjivar.com/api"
