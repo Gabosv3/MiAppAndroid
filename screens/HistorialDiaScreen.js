@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
-  StatusBar, ActivityIndicator, Modal, ScrollView, Linking, Alert,
+  StatusBar, ActivityIndicator, Modal, ScrollView, Alert, Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
@@ -72,6 +72,50 @@ const buildReciboHtml = ({ clienteNombre, ventaNumero, monto, metodo, proximaVis
     </div><hr class="divider"/>` : ''}
     <div class="center" style="font-weight:700;font-size:11px">Gracias por su cobro!</div>
   </body></html>`;
+};
+
+const abrirWhatsApp = async (telefono, mensaje) => {
+  const num = (telefono || '').replace(/\D/g, '');
+  if (!num) { Alert.alert('Sin teléfono', 'El cliente no tiene número registrado.'); return; }
+  const numero = num.startsWith('503') ? num : `503${num}`;
+  const url = `https://wa.me/${numero}?text=${encodeURIComponent(mensaje)}`;
+  const puede = await Linking.canOpenURL(url);
+  if (puede) { await Linking.openURL(url); }
+  else { Alert.alert('WhatsApp no disponible', 'No se encontró WhatsApp en este dispositivo.'); }
+};
+
+const mensajeCobro = (item) => {
+  const fechaFmt = new Date(item.fecha).toLocaleDateString('es-SV');
+  const proxFmt = item.proximaVisita
+    ? new Date(item.proximaVisita + 'T12:00:00').toLocaleDateString('es-SV', { day: '2-digit', month: 'long', year: 'numeric' })
+    : '';
+  return `🏪 *DISTRIBUIDORA BM*
+📋 *RECIBO DE COBRO*
+━━━━━━━━━━━━━━━━━━━━
+📅 Fecha: ${fechaFmt}
+👤 Cliente: ${item.clienteNombre}
+🔖 Venta: ${item.ventaNumero || 'N/A'}
+💳 Método: ${item.metodo}
+
+💰 *Monto abonado: ${fmt(item.monto)}*
+${proxFmt ? `\n📅 *Próxima visita: ${proxFmt}*` : ''}
+━━━━━━━━━━━━━━━━━━━━
+¡Gracias por su pago! 🙏`;
+};
+
+const mensajeVisita = (item) => {
+  const info = VISITA_INFO[item.resultadoVisita] || { label: item.resultadoVisita, icon: '📍' };
+  const fechaFmt = new Date(item.fecha).toLocaleDateString('es-SV');
+  const horaFmt = new Date(item.fecha).toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit', hour12: true });
+  return `🏪 *DISTRIBUIDORA BM*
+📋 *REGISTRO DE VISITA*
+━━━━━━━━━━━━━━━━━━━━
+📅 Fecha: ${fechaFmt} ${horaFmt}
+👤 Cliente: ${item.clienteNombre}
+${info.icon} Resultado: ${info.label}
+${item.observaciones ? `📝 Obs: ${item.observaciones}` : ''}
+━━━━━━━━━━━━━━━━━━━━
+_Distribuidora BM_`;
 };
 
 export default function HistorialDiaScreen({ navigation }) {
@@ -278,6 +322,15 @@ export default function HistorialDiaScreen({ navigation }) {
                     <Text style={s.btnImprimirTxt}>🖨️  Reimprimir</Text>
                   </TouchableOpacity>
                 )}
+                <TouchableOpacity
+                  style={s.btnWhatsapp}
+                  onPress={() => {
+                    const msg = selected.tipo === 'visita' ? mensajeVisita(selected) : mensajeCobro(selected);
+                    abrirWhatsApp(selected.clienteWhatsapp, msg);
+                  }}
+                >
+                  <Text style={s.btnWhatsappTxt}>💬  Enviar por WhatsApp</Text>
+                </TouchableOpacity>
                 <TouchableOpacity style={s.btnSecondary} onPress={() => setSelected(null)}>
                   <Text style={s.btnSecondaryTxt}>Cerrar</Text>
                 </TouchableOpacity>
@@ -357,6 +410,8 @@ const s = StyleSheet.create({
   modalBtns: { paddingHorizontal: 20, gap: 10 },
   btnImprimir: { backgroundColor: '#fff', borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 1.5, borderColor: '#1565C0' },
   btnImprimirTxt: { color: '#1565C0', fontWeight: '700', fontSize: 14 },
+  btnWhatsapp: { backgroundColor: '#25D366', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+  btnWhatsappTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
   btnSecondary: { backgroundColor: '#f5f6fa', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
   btnSecondaryTxt: { color: '#666', fontWeight: '700', fontSize: 14 },
 });

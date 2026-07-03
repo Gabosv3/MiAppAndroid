@@ -3,6 +3,7 @@ import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, StatusBar,
   ScrollView, ActivityIndicator, Alert, Platform,
 } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Print from 'expo-print';
 import api from '../services/api';
 import { useConnectivity } from '../services/connectivity';
@@ -88,13 +89,26 @@ export default function RegistrarPagoScreen({ navigation, route }) {
   const nombreCobrador = user?.name || user?.full_name || user?.nombre || user?.usuario || 'Cobrador';
 
   const saldoNum = parseFloat(String(saldoPendiente || '0').replace(',', '.')) || 0;
-  const [monto,       setMonto]       = useState('');
-  const [metodo,      setMetodo]      = useState('efectivo');
-  const [referencia,  setReferencia]  = useState('');
-  const [notas,       setNotas]       = useState('');
-  const [submitting,  setSubmitting]  = useState(false);
-  const [showMetodos, setShowMetodos] = useState(false);
+  const [monto,          setMonto]          = useState('');
+  const [metodo,         setMetodo]         = useState('efectivo');
+  const [referencia,     setReferencia]     = useState('');
+  const [notas,          setNotas]          = useState('');
+  const [submitting,     setSubmitting]     = useState(false);
+  const [showMetodos,    setShowMetodos]    = useState(false);
+  const [opcionVisita,    setOpcionVisita]    = useState('14'); // '14' | '28' | 'custom'
+  const [fechaCustomDate, setFechaCustomDate] = useState(new Date());
+  const [showDatePicker,  setShowDatePicker]  = useState(false);
   const { isOnline } = useConnectivity();
+
+  const pad = n => String(n).padStart(2, '0');
+  const dateToStr = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+
+  const calcProximaVisita = () => {
+    if (opcionVisita === 'custom') return dateToStr(fechaCustomDate);
+    const d = new Date();
+    d.setDate(d.getDate() + Number(opcionVisita));
+    return dateToStr(d);
+  };
 
   const montoNum = parseFloat(monto)||0;
   const metodoObj = METODOS.find(m=>m.value===metodo)||METODOS[0];
@@ -113,9 +127,12 @@ export default function RegistrarPagoScreen({ navigation, route }) {
         // Guardar en historial local también (para que aparezca en HistorialDiaScreen)
         const saldoAntes = saldoNum;
         const saldoDespues = Math.max(0, saldoAntes - montoNum);
+        const proxVisita = calcProximaVisita();
         await guardarEnHistorial({
           clienteId: cliente.id, clienteNombre: cliente.nombre,
+          clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
           ventaNumero, monto: montoNum, metodo,
+          proximaVisitaFecha: proxVisita,
           resultado: {
             ok: true,
             mensaje: 'Cobro pendiente de envío (offline)',
@@ -132,7 +149,7 @@ export default function RegistrarPagoScreen({ navigation, route }) {
           montoTotal: montoNum,
           metodoPago: metodo,
           ventaNumero,
-          proximaVisita: null,
+          proximaVisita: proxVisita,
           saldoAntes,
           saldoDespues,
           nombreCobrador,
@@ -151,9 +168,12 @@ export default function RegistrarPagoScreen({ navigation, route }) {
         ...(referencia.trim() && { referencia: referencia.trim() }),
         ...(notas.trim()      && { observaciones: notas.trim() }),
       });
+      const proxVisita = calcProximaVisita();
       const histItem = await guardarEnHistorial({
         clienteId: cliente.id, clienteNombre: cliente.nombre,
+        clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
         ventaNumero, monto: montoNum, metodo, resultado: data,
+        proximaVisitaFecha: proxVisita,
       });
       await marcarClienteVisitado(cliente.id);
       const saldoAntes   = saldoNum;
@@ -348,6 +368,51 @@ export default function RegistrarPagoScreen({ navigation, route }) {
             <Text style={s.infoIcon}>ℹ️</Text>
             <Text style={s.infoTxt}>El sistema distribuirá el pago automáticamente entre las cuotas pendientes por fecha de vencimiento.</Text>
           </View>
+
+          {/* Próxima visita */}
+          <Text style={[s.label, { marginTop: 18 }]}>📅 Próxima visita</Text>
+          <View style={s.visitaOpciones}>
+            {[
+              { key: '14', label: '14 días', sub: 'Defecto' },
+              { key: '28', label: '28 días', sub: '4 semanas' },
+              { key: 'custom', label: 'Elegir', sub: 'Fecha exacta' },
+            ].map(op => (
+              <TouchableOpacity
+                key={op.key}
+                style={[s.visitaOpcion, opcionVisita === op.key && s.visitaOpcionOn]}
+                onPress={() => setOpcionVisita(op.key)}
+                activeOpacity={0.75}
+              >
+                <Text style={[s.visitaOpcionLabel, opcionVisita === op.key && { color: '#1565C0', fontWeight: '800' }]}>
+                  {op.label}
+                </Text>
+                <Text style={[s.visitaOpcionSub, opcionVisita === op.key && { color: '#1565C0' }]}>
+                  {op.sub}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {opcionVisita === 'custom' && (
+            <>
+              <TouchableOpacity style={s.dateBtn} onPress={() => setShowDatePicker(true)}>
+                <Text style={s.dateBtnIco}>📅</Text>
+                <Text style={s.dateBtnTxt}>{dateToStr(fechaCustomDate)}</Text>
+                <Text style={s.dateBtnArrow}>›</Text>
+              </TouchableOpacity>
+              {showDatePicker && (
+                <DateTimePicker
+                  value={fechaCustomDate}
+                  mode="date"
+                  display="default"
+                  minimumDate={new Date()}
+                  onChange={(_, date) => {
+                    setShowDatePicker(false);
+                    if (date) setFechaCustomDate(date);
+                  }}
+                />
+              )}
+            </>
+          )}
         </View>
 
         {/* ── Resumen ── */}
@@ -450,6 +515,17 @@ const s = StyleSheet.create({
   resumenBorder: { borderBottomWidth:1, borderBottomColor:'#f0f0f0' },
   resumenLabel:  { flex:1, color:'#888', fontSize:13 },
   resumenVal:    { color:'#1a1a1a', fontSize:13, fontWeight:'600' },
+
+  dateBtn:          { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: '#1565C0', borderRadius: 10, padding: 14, marginTop: 8, backgroundColor: '#e3f2fd' },
+  dateBtnIco:       { fontSize: 18, marginRight: 10 },
+  dateBtnTxt:       { flex: 1, fontSize: 15, fontWeight: '700', color: '#1565C0' },
+  dateBtnArrow:     { fontSize: 20, color: '#1565C0' },
+
+  visitaOpciones:   { flexDirection: 'row', gap: 8, marginTop: 6 },
+  visitaOpcion:     { flex: 1, borderWidth: 1.5, borderColor: '#e0e0e0', borderRadius: 10, paddingVertical: 10, alignItems: 'center', backgroundColor: '#fafafa' },
+  visitaOpcionOn:   { borderColor: '#1565C0', backgroundColor: '#e3f2fd' },
+  visitaOpcionLabel:{ fontSize: 13, fontWeight: '700', color: '#555' },
+  visitaOpcionSub:  { fontSize: 10, color: '#aaa', marginTop: 2 },
 
   btnPrimary:    { marginHorizontal:12, backgroundColor:'#1565C0', borderRadius:12, paddingVertical:16, alignItems:'center', marginBottom:10, elevation:2 },
   btnPrimaryTxt: { color:'#fff', fontWeight:'800', fontSize:15 },

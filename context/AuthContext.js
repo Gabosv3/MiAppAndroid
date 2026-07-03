@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api, { setAuthToken, clearAuthToken } from '../services/api';
 import { startHeartbeat, stopHeartbeat } from '../services/posHeartbeat';
+import { verificarActualizacion } from '../services/updateChecker';
 
 const AuthContext = createContext();
 const STORAGE_KEY_AUTH = '@miapp/auth';
@@ -56,6 +57,7 @@ export function AuthProvider({ children }) {
           const { data: me } = await api.get('/me');
           setUser({ ...me, token: stored.token });
           startHeartbeat();
+          verificarActualizacion();
         } catch {
           clearAuthToken();
           await AsyncStorage.removeItem(STORAGE_KEY_AUTH);
@@ -109,6 +111,7 @@ export function AuthProvider({ children }) {
       setUser(userData);
       await saveAuthData({ user: userData, token: t, email, password });
       startHeartbeat();
+      verificarActualizacion(); // no-await: corre en segundo plano sin bloquear login
       console.log('✅ Login successful');
     } catch (e) {
       console.log('=== LOGIN ERROR ===');
@@ -133,6 +136,7 @@ export function AuthProvider({ children }) {
         try {
           await attemptOfflineLogin(email, password);
           startHeartbeat();
+          verificarActualizacion();
           console.log('✅ Offline login successful');
           return;
         } catch (offlineException) {

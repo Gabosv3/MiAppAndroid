@@ -89,24 +89,26 @@ const proximaVisita = (diasBase = 14) => {
 };
 
 export const guardarEnHistorial = async ({
-  clienteId, clienteNombre, ventaNumero, monto, metodo, resultado,
+  clienteId, clienteNombre, clienteWhatsapp = null, ventaNumero, monto, metodo, resultado,
   tipo = 'pago', resultadoVisita = null, observaciones = null,
+  proximaVisitaFecha = null,
 }) => {
   const raw = await AsyncStorage.getItem(KEYS.historial);
   const historial = raw ? JSON.parse(raw) : [];
   const item = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    tipo, // 'pago' | 'visita'
+    tipo,
     clienteId,
     clienteNombre,
+    clienteWhatsapp,
     ventaNumero,
     monto,
     metodo,
-    resultadoVisita, // 'sin_pago' | 'promesa_pago' | 'no_encontrado' | 'rechazo'
+    resultadoVisita,
     observaciones,
     fecha: new Date().toISOString(),
-    proximaVisita: tipo === 'pago' ? proximaVisita(14) : null,
-    resultado, // guardamos la respuesta completa internamente
+    proximaVisita: tipo === 'pago' ? (proximaVisitaFecha || proximaVisita(14)) : null,
+    resultado,
   };
   historial.unshift(item); // más reciente primero
   // Mantener máximo 200 registros

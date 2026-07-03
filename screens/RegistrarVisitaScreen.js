@@ -3,6 +3,7 @@ import {
   View, Text, TouchableOpacity, StyleSheet, StatusBar,
   ScrollView, TextInput, ActivityIndicator, Alert, Image, Platform,
 } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import api from '../services/api';
@@ -15,16 +16,22 @@ const RESULTADOS = [
   { value: 'sin_pago',      label: 'Estaba pero no pagó', icon: '🚫', color: '#e65100', bg: '#fff3e0' },
   { value: 'promesa_pago',  label: 'Prometió pagar',      icon: '🤝', color: '#2e7d32', bg: '#e8f5e9' },
   { value: 'rechazo',       label: 'Se negó a atender',   icon: '⛔', color: '#c62828', bg: '#ffebee' },
+  { value: 'abono_previo',  label: 'Ya abonó mensualidad',icon: '✅', color: '#00695c', bg: '#e0f2f1' },
 ];
+
+// Opciones que NO requieren foto ni GPS
+const SIN_EVIDENCIA = new Set(['abono_previo']);
 
 export default function RegistrarVisitaScreen({ navigation, route }) {
   const { cliente } = route.params;
   const { isOnline } = useConnectivity();
 
-  const [resultado,     setResultado]     = useState(null);
-  const [observaciones, setObservaciones] = useState('');
-  const [promesaFecha,  setPromesaFecha]  = useState('');
-  const [foto,          setFoto]          = useState(null);
+  const [resultado,      setResultado]     = useState(null);
+  const [observaciones,  setObservaciones] = useState('');
+  const [opcionPromesa,    setOpcionPromesa]    = useState('14'); // '14' | '28' | 'custom'
+  const [promesaCustomDate,setPromesaCustomDate] = useState(new Date());
+  const [showDatePicker,   setShowDatePicker]    = useState(false);
+  const [foto,           setFoto]          = useState(null);
   const [ubicacion,     setUbicacion]     = useState(null);
   const [capturandoGps, setCapturandoGps] = useState(false);
   const [submitting,    setSubmitting]    = useState(false);
@@ -66,7 +73,16 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
     setUbicacion(null);
   };
 
-  // Validar fecha YYYY-MM-DD futura
+  const pad = n => String(n).padStart(2, '0');
+  const dateToStr = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+
+  const calcPromesaFecha = () => {
+    if (opcionPromesa === 'custom') return dateToStr(promesaCustomDate);
+    const d = new Date();
+    d.setDate(d.getDate() + Number(opcionPromesa));
+    return dateToStr(d);
+  };
+
   const fechaValida = (f) => /^\d{4}-\d{2}-\d{2}$/.test(f) && new Date(f) > new Date();
 
   // Registrar visita
@@ -75,12 +91,14 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
       Alert.alert('Falta seleccionar', 'Elige qué pasó en la visita.');
       return;
     }
-    if (!foto) {
+    const esSinEvidencia = SIN_EVIDENCIA.has(resultado);
+    if (!esSinEvidencia && !foto) {
       Alert.alert('Foto requerida', 'Debes tomar una foto del hogar para registrar la visita.');
       return;
     }
+    const promesaFecha = resultado === 'promesa_pago' ? calcPromesaFecha() : null;
     if (resultado === 'promesa_pago' && !fechaValida(promesaFecha)) {
-      Alert.alert('Fecha requerida', 'Ingresa una fecha futura válida (YYYY-MM-DD) para la promesa de pago.');
+      Alert.alert('Fecha inválida', 'La fecha personalizada debe ser futura con formato YYYY-MM-DD.');
       return;
     }
 
@@ -94,11 +112,13 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
         form.append('latitud',  String(ubicacion.lat));
         form.append('longitud', String(ubicacion.lng));
       }
-      form.append('foto_hogar', {
-        uri: Platform.OS === 'ios' ? foto.uri.replace('file://', '') : foto.uri,
-        type: foto.type,
-        name: foto.name,
-      });
+      if (foto) {
+        form.append('foto_hogar', {
+          uri: Platform.OS === 'ios' ? foto.uri.replace('file://', '') : foto.uri,
+          type: foto.type,
+          name: foto.name,
+        });
+      }
 
       if (isOnline) {
         const { data } = await api.post(`/cobros/clientes/${cliente.id}/visita`, form, {
@@ -106,6 +126,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
         });
         await guardarEnHistorial({
           clienteId: cliente.id, clienteNombre: cliente.nombre,
+          clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
           tipo: 'visita', resultadoVisita: resultado,
           observaciones: observaciones.trim() || null,
           resultado: data,
@@ -130,6 +151,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
         });
         await guardarEnHistorial({
           clienteId: cliente.id, clienteNombre: cliente.nombre,
+          clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
           tipo: 'visita', resultadoVisita: resultado,
           observaciones: observaciones.trim() || null,
           resultado: { ok: true, mensaje: 'Visita pendiente de envío (offline)' },
@@ -146,10 +168,14 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
     } finally {
       setSubmitting(false);
     }
-  }, [resultado, observaciones, promesaFecha, foto, ubicacion, isOnline, cliente.id, navigation]);
+  }, [resultado, observaciones, opcionPromesa, promesaCustomDate, foto, ubicacion, isOnline, cliente.id, navigation]);
 
   const resObj = RESULTADOS.find(r => r.value === resultado);
-  const puedeRegistrar = resultado && foto && !submitting;
+  const sinEvidencia = !!resultado && SIN_EVIDENCIA.has(resultado);
+  // Sin evidencia (ej: abono_previo): solo necesita resultado seleccionado
+  // Con evidencia: requiere foto + ubicación GPS
+  const puedeRegistrar = resultado && !submitting &&
+    (sinEvidencia || (foto && ubicacion && !capturandoGps));
 
   return (
     <View style={s.root}>
@@ -198,43 +224,77 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
         {resultado === 'promesa_pago' && (
           <View style={s.card}>
             <Text style={s.cardTitle}>¿Para cuándo prometió pagar? *</Text>
-            <TextInput
-              style={s.input}
-              value={promesaFecha}
-              onChangeText={setPromesaFecha}
-              placeholder="YYYY-MM-DD  ej: 2026-06-25"
-              placeholderTextColor="#bbb"
-              keyboardType="numbers-and-punctuation"
-              maxLength={10}
-            />
-            <Text style={s.inputHint}>Debe ser una fecha futura</Text>
+            <View style={s.visitaOpciones}>
+              {[
+                { key: '14', label: '14 días', sub: 'Defecto' },
+                { key: '28', label: '28 días', sub: '4 semanas' },
+                { key: 'custom', label: 'Elegir', sub: 'Fecha exacta' },
+              ].map(op => (
+                <TouchableOpacity
+                  key={op.key}
+                  style={[s.visitaOpcion, opcionPromesa === op.key && s.visitaOpcionOn]}
+                  onPress={() => setOpcionPromesa(op.key)}
+                  activeOpacity={0.75}
+                >
+                  <Text style={[s.visitaOpcionLabel, opcionPromesa === op.key && { color: '#1565C0', fontWeight: '800' }]}>
+                    {op.label}
+                  </Text>
+                  <Text style={[s.visitaOpcionSub, opcionPromesa === op.key && { color: '#1565C0' }]}>
+                    {op.sub}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {opcionPromesa === 'custom' && (
+              <>
+                <TouchableOpacity style={s.dateBtn} onPress={() => setShowDatePicker(true)}>
+                  <Text style={s.dateBtnIco}>📅</Text>
+                  <Text style={s.dateBtnTxt}>{dateToStr(promesaCustomDate)}</Text>
+                  <Text style={s.dateBtnArrow}>›</Text>
+                </TouchableOpacity>
+                {showDatePicker && (
+                  <DateTimePicker
+                    value={promesaCustomDate}
+                    mode="date"
+                    display="default"
+                    minimumDate={new Date()}
+                    onChange={(_, date) => {
+                      setShowDatePicker(false);
+                      if (date) setPromesaCustomDate(date);
+                    }}
+                  />
+                )}
+              </>
+            )}
           </View>
         )}
 
-        {/* ── Foto ── */}
-        <View style={s.card}>
-          <Text style={s.cardTitle}>📷 Foto del hogar *</Text>
-          <Text style={s.cardDesc}>Toma una foto del frente de la casa como comprobante de visita.</Text>
+        {/* ── Foto (no aplica para abono_previo) ── */}
+        {!sinEvidencia && (
+          <View style={s.card}>
+            <Text style={s.cardTitle}>📷 Foto del hogar *</Text>
+            <Text style={s.cardDesc}>Toma una foto del frente de la casa como comprobante de visita.</Text>
 
-          {foto ? (
-            <View style={s.fotoContainer}>
-              <Image source={{ uri: foto.uri }} style={s.fotoPreview} resizeMode="cover" />
-              {capturandoGps && (
-                <View style={s.gpsOverlay}>
-                  <ActivityIndicator color="#fff" size="small" />
-                </View>
-              )}
-              <TouchableOpacity style={s.fotoRemove} onPress={quitarFoto}>
-                <Text style={s.fotoRemoveTxt}>✕ Volver a tomar</Text>
+            {foto ? (
+              <View style={s.fotoContainer}>
+                <Image source={{ uri: foto.uri }} style={s.fotoPreview} resizeMode="cover" />
+                {capturandoGps && (
+                  <View style={s.gpsOverlay}>
+                    <ActivityIndicator color="#fff" size="small" />
+                  </View>
+                )}
+                <TouchableOpacity style={s.fotoRemove} onPress={quitarFoto}>
+                  <Text style={s.fotoRemoveTxt}>✕ Volver a tomar</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity style={s.fotoBtnGrande} onPress={tomarFoto} activeOpacity={0.8}>
+                <Text style={s.fotoBtnGrandeIco}>📷</Text>
+                <Text style={s.fotoBtnGrandeTxt}>Tomar foto</Text>
               </TouchableOpacity>
-            </View>
-          ) : (
-            <TouchableOpacity style={s.fotoBtnGrande} onPress={tomarFoto} activeOpacity={0.8}>
-              <Text style={s.fotoBtnGrandeIco}>📷</Text>
-              <Text style={s.fotoBtnGrandeTxt}>Tomar foto</Text>
-            </TouchableOpacity>
-          )}
-        </View>
+            )}
+          </View>
+        )}
 
         {/* ── Observaciones ── */}
         <View style={s.card}>
@@ -256,15 +316,27 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
           <View style={[s.resumen, { borderColor: resObj?.color || '#eee' }]}>
             <Text style={[s.resumenTitulo, { color: resObj?.color }]}>{resObj?.icon} {resObj?.label}</Text>
             {foto && <Text style={s.resumenItem}>📷 Foto tomada</Text>}
-            {resultado === 'promesa_pago' && promesaFecha
-              && <Text style={s.resumenItem}>📅 Promesa para: {promesaFecha}</Text>}
+            {ubicacion && <Text style={s.resumenItem}>📍 Ubicación registrada</Text>}
+            {resultado === 'promesa_pago' && (
+              <Text style={s.resumenItem}>📅 Promesa para: {calcPromesaFecha() || '—'}</Text>
+            )}
           </View>
         )}
 
-        {/* ── Aviso si falta foto ── */}
-        {resultado && !foto && (
+        {/* ── Avisos de validación (solo cuando se requiere evidencia) ── */}
+        {!sinEvidencia && resultado && !foto && (
           <View style={s.avisoFoto}>
             <Text style={s.avisoFotoTxt}>📷 Falta tomar la foto del hogar para poder registrar</Text>
+          </View>
+        )}
+        {!sinEvidencia && foto && capturandoGps && (
+          <View style={[s.avisoFoto, { backgroundColor: '#e3f2fd', borderColor: '#90caf9' }]}>
+            <Text style={[s.avisoFotoTxt, { color: '#1565C0' }]}>📍 Obteniendo ubicación GPS, espera un momento...</Text>
+          </View>
+        )}
+        {!sinEvidencia && foto && !capturandoGps && !ubicacion && (
+          <View style={s.avisoFoto}>
+            <Text style={s.avisoFotoTxt}>📍 No se pudo obtener la ubicación. Quita la foto y vuelve a tomarla en exteriores.</Text>
           </View>
         )}
 
@@ -353,6 +425,17 @@ const s = StyleSheet.create({
     borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#ffe082',
   },
   avisoFotoTxt: { color: '#f57f17', fontSize: 13, fontWeight: '600', textAlign: 'center' },
+
+  dateBtn:           { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: '#1565C0', borderRadius: 10, padding: 14, marginTop: 10, backgroundColor: '#e3f2fd' },
+  dateBtnIco:        { fontSize: 18, marginRight: 10 },
+  dateBtnTxt:        { flex: 1, fontSize: 15, fontWeight: '700', color: '#1565C0' },
+  dateBtnArrow:      { fontSize: 20, color: '#1565C0' },
+
+  visitaOpciones:    { flexDirection: 'row', gap: 8, marginTop: 6 },
+  visitaOpcion:      { flex: 1, borderWidth: 1.5, borderColor: '#e0e0e0', borderRadius: 10, paddingVertical: 10, alignItems: 'center', backgroundColor: '#fafafa' },
+  visitaOpcionOn:    { borderColor: '#1565C0', backgroundColor: '#e3f2fd' },
+  visitaOpcionLabel: { fontSize: 13, fontWeight: '700', color: '#555' },
+  visitaOpcionSub:   { fontSize: 10, color: '#aaa', marginTop: 2 },
 
   btnPrimary:     { marginHorizontal: 12, marginTop: 14, backgroundColor: '#1565C0', borderRadius: 12, paddingVertical: 16, alignItems: 'center', elevation: 2 },
   btnPrimaryTxt:  { color: '#fff', fontWeight: '800', fontSize: 15 },

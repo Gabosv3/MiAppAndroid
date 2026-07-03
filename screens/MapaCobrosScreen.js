@@ -203,10 +203,11 @@ export default function MapaCobrosScreen({ navigation, route }) {
         ref={webRef}
         style={s.map}
         originWhitelist={['*']}
-        source={{ html }}
+        source={{ html, baseUrl: 'https://unpkg.com' }}
         javaScriptEnabled
         domStorageEnabled
         geolocationEnabled
+        mixedContentMode="always"
         onMessage={onWebMessage}
       />
 

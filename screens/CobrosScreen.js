@@ -79,33 +79,43 @@ export default function CobrosScreen({ navigation }) {
     leerClientesVisitadosHoy().then(setVisitadosIds);
   }, [cargar]));
 
-  const todos = useMemo(() => {
-    const visitadosSet = new Set(visitadosIds);
+  // Todos los clientes con orden aplicado (sin filtrar visitados)
+  const todosOrdenados = useMemo(() => {
     const base = rutas
-      .flatMap(r => (r.clientes||[]).map(c => ({ ...c, rutaNombre: r.nombre, rutaId: r.id })))
-      .filter(c => !visitadosSet.has(c.id)); // ya gestionado hoy (pago o visita) → fuera de la lista
+      .flatMap(r => (r.clientes||[]).map(c => ({ ...c, rutaNombre: r.nombre, rutaId: r.id })));
     if (!ordenIds.length) return base;
-    // Aplica el orden guardado por el cobrador; clientes nuevos (sin orden) van al final
     const posicion = new Map(ordenIds.map((id, i) => [id, i]));
     return [...base].sort((a, b) => {
       const pa = posicion.has(a.id) ? posicion.get(a.id) : Infinity;
       const pb = posicion.has(b.id) ? posicion.get(b.id) : Infinity;
       return pa - pb;
     });
-  }, [rutas, ordenIds, visitadosIds]);
+  }, [rutas, ordenIds]);
+
+  // Lista normal (sin visitados) para cuando no hay búsqueda
+  const todos = useMemo(() => {
+    const visitadosSet = new Set(visitadosIds);
+    return todosOrdenados.filter(c => !visitadosSet.has(c.id));
+  }, [todosOrdenados, visitadosIds]);
 
   const lista = useMemo(() => {
-    let arr = rutaId ? todos.filter(c => c.rutaId === rutaId) : todos;
-    if (query.trim()) {
+    const buscando = query.trim().length > 0;
+    // Al buscar, mostrar TODOS (incluyendo visitados) para poder hacer revisita
+    const fuente = buscando ? todosOrdenados : todos;
+    const visitadosSet = new Set(visitadosIds);
+    let arr = rutaId ? fuente.filter(c => c.rutaId === rutaId) : fuente;
+    if (buscando) {
       const q = query.toLowerCase();
       arr = arr.filter(c =>
         c.nombre?.toLowerCase().includes(q) ||
         c.codigo_anterior?.toLowerCase().includes(q) ||
         c.telefono?.includes(q)
       );
+      // Marcar los visitados para que se vean diferente en la lista
+      arr = arr.map(c => ({ ...c, _visitadoHoy: visitadosSet.has(c.id) }));
     }
     return arr;
-  }, [todos, query, rutaId]);
+  }, [todos, todosOrdenados, query, rutaId, visitadosIds]);
 
   const puedeOrdenar = !query.trim();
 
@@ -197,6 +207,11 @@ export default function CobrosScreen({ navigation }) {
 
           {/* Badges */}
           <View style={s.badgesRow}>
+            {c._visitadoHoy && (
+              <View style={[s.badge, {backgroundColor:'#e8f5e9'}]}>
+                <Text style={[s.badgeTxt, {color:'#2e7d32'}]}>✓ Visitado hoy</Text>
+              </View>
+            )}
             {ventasAct > 0 && (
               <View style={[s.badge, {backgroundColor:'#e3f2fd'}]}>
                 <Text style={[s.badgeTxt, {color:'#1565C0'}]}>🗓 {ventasAct} venta{ventasAct>1?'s':''} activa{ventasAct>1?'s':''}</Text>
