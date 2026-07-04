@@ -16,28 +16,43 @@ const esVersionMayor = (remota, local) => {
   return false;
 };
 
-export const verificarActualizacion = async () => {
+export const verificarActualizacion = async ({ manual = false } = {}) => {
   try {
     const versionActual = Constants.expoConfig?.version || '1.0.0';
-    const res = await fetch(VERSION_URL, { cache: 'no-store' });
-    if (!res.ok) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    let res;
+    try {
+      res = await fetch(VERSION_URL, { cache: 'no-store', signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      if (manual) Alert.alert('Sin respuesta', 'No se pudo contactar el servidor de actualizaciones.');
+      return;
+    }
     const { version, url, notas } = await res.json();
-    if (!version || !url) return;
-    if (!esVersionMayor(version, versionActual)) return;
+    if (!version || !url) {
+      if (manual) Alert.alert('Sin respuesta', 'El servidor no devolvió información de versión.');
+      return;
+    }
+    if (!esVersionMayor(version, versionActual)) {
+      if (manual) Alert.alert('✅ App al día', `Tienes la versión más reciente (${versionActual}).`);
+      return;
+    }
 
     Alert.alert(
       '🚀 Nueva versión disponible',
       `Versión ${version} disponible${notas ? `\n\n${notas}` : ''}\n\nTu versión actual: ${versionActual}`,
       [
         { text: 'Ahora no', style: 'cancel' },
-        {
-          text: 'Actualizar',
-          onPress: () => Linking.openURL(url),
-        },
+        { text: 'Actualizar', onPress: () => Linking.openURL(url) },
       ],
       { cancelable: true }
     );
   } catch {
-    // Sin conexión o servidor no responde — ignorar silenciosamente
+    if (manual) Alert.alert('Sin conexión', 'No se pudo verificar actualizaciones. Revisa tu conexión.');
   }
 };
+
+export const versionActual = () => Constants.expoConfig?.version || '1.0.0';

@@ -118,21 +118,21 @@ export default function RegistrarPagoScreen({ navigation, route }) {
 
     if (!isOnline) {
       try {
-        await encolarPago({
+        const saldoAntes = saldoNum;
+        const saldoDespues = Math.max(0, saldoAntes - montoNum);
+        const proxVisita = calcProximaVisita();
+        const pagoEncolado = await encolarPago({
           clienteId: cliente.id, clienteNombre: cliente.nombre,
           ventaId, ventaNumero,
           monto: montoNum, metodo,
           referencia: referencia.trim(), notas: notas.trim(),
         });
-        // Guardar en historial local también (para que aparezca en HistorialDiaScreen)
-        const saldoAntes = saldoNum;
-        const saldoDespues = Math.max(0, saldoAntes - montoNum);
-        const proxVisita = calcProximaVisita();
         await guardarEnHistorial({
           clienteId: cliente.id, clienteNombre: cliente.nombre,
           clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
           ventaNumero, monto: montoNum, metodo,
           proximaVisitaFecha: proxVisita,
+          pagoOfflineId: pagoEncolado.id,
           resultado: {
             ok: true,
             mensaje: 'Cobro pendiente de envío (offline)',

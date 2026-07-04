@@ -91,7 +91,7 @@ const proximaVisita = (diasBase = 14) => {
 export const guardarEnHistorial = async ({
   clienteId, clienteNombre, clienteWhatsapp = null, ventaNumero, monto, metodo, resultado,
   tipo = 'pago', resultadoVisita = null, observaciones = null,
-  proximaVisitaFecha = null,
+  proximaVisitaFecha = null, pagoOfflineId = null,
 }) => {
   const raw = await AsyncStorage.getItem(KEYS.historial);
   const historial = raw ? JSON.parse(raw) : [];
@@ -109,6 +109,7 @@ export const guardarEnHistorial = async ({
     fecha: new Date().toISOString(),
     proximaVisita: tipo === 'pago' ? (proximaVisitaFecha || proximaVisita(14)) : null,
     resultado,
+    ...(pagoOfflineId && { pagoOfflineId }),
   };
   historial.unshift(item); // más reciente primero
   // Mantener máximo 200 registros
@@ -120,6 +121,20 @@ export const leerHistorial = async () => {
   const raw = await AsyncStorage.getItem(KEYS.historial);
   if (!raw) return [];
   try { return JSON.parse(raw); } catch { return []; }
+};
+
+// Actualiza el primer registro offline pendiente que coincida con el pago sincronizado.
+// Evita duplicados en el historial al sincronizar pagos guardados sin conexión.
+const actualizarHistorialOffline = async (pagoId, respuestaServidor) => {
+  const raw = await AsyncStorage.getItem(KEYS.historial);
+  const historial = raw ? JSON.parse(raw) : [];
+  // Busca el registro offline que corresponde a este pago por su id de cola
+  const idx = historial.findIndex(h => h.pagoOfflineId === pagoId);
+  if (idx !== -1) {
+    historial[idx] = { ...historial[idx], resultado: respuestaServidor, sincronizado: true };
+    await AsyncStorage.setItem(KEYS.historial, JSON.stringify(historial));
+  }
+  // Si no encuentra el registro (ej: historial borrado), no hace nada — no duplica
 };
 
 export const leerHistorialCliente = async (clienteId) => {
@@ -177,19 +192,13 @@ export const sincronizarPagosPendientes = async (api) => {
       const { data } = await api.post(`/cobros/clientes/${pago.clienteId}/pagar`, {
         monto: pago.monto,
         metodo_pago: pago.metodo,
-        ...(pago.ventaId    && { venta_id: pago.ventaId }),
+        ...(pago.ventaId != null && { venta_id: pago.ventaId }),
         ...(pago.referencia && { referencia: pago.referencia }),
         ...(pago.notas      && { observaciones: pago.notas }),
       });
-      // Actualizar el historial con la respuesta real del servidor
-      await guardarEnHistorial({
-        clienteId: pago.clienteId,
-        clienteNombre: pago.clienteNombre,
-        ventaNumero: pago.ventaNumero,
-        monto: pago.monto,
-        metodo: pago.metodo,
-        resultado: data, // respuesta real del servidor
-      });
+      // Actualizar el registro offline existente con la respuesta real del servidor
+      // (no crear uno nuevo — ya fue guardado cuando se registró offline)
+      await actualizarHistorialOffline(pago.id, data);
       await eliminarPago(pago.id);
       synced++;
       console.log(`✅ Cobro sincronizado: ${pago.clienteNombre} $${pago.monto}`);

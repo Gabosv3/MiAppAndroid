@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, StatusBar,
-  ScrollView, Image,
+  ScrollView, Image, ActivityIndicator,
 } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
 import CustomDrawer from '../navigation/CustomDrawerContent';
+import { verificarActualizacion, versionActual } from '../services/updateChecker';
 
 const DIAS = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
 const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
@@ -22,6 +23,7 @@ export default function HomeScreen({ navigation }) {
   const { user } = useAuth();
   const { isOnline } = useConnectivity();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [buscandoUpdate, setBuscandoUpdate] = useState(false);
   const syncing = useRef(false);
 
   // Auto-sync silencioso: cada vez que vuelve la conexión, envía la cola pendiente
@@ -104,6 +106,24 @@ export default function HomeScreen({ navigation }) {
             <Text style={[s.conexionTxt, { color: isOnline ? '#10B981' : '#e53e3e' }]}>
               {isOnline ? 'Conectado al servidor' : 'Sin conexión'}
             </Text>
+          </View>
+
+          {/* Versión y botón de actualización */}
+          <View style={s.versionRow}>
+            <Text style={s.versionTxt}>v{versionActual()}</Text>
+            <TouchableOpacity
+              style={[s.updateBtn, buscandoUpdate && s.updateBtnDisabled]}
+              disabled={buscandoUpdate}
+              onPress={async () => {
+                setBuscandoUpdate(true);
+                await verificarActualizacion({ manual: true });
+                setBuscandoUpdate(false);
+              }}
+            >
+              {buscandoUpdate
+                ? <ActivityIndicator size="small" color="#F5A623" />
+                : <Text style={s.updateBtnTxt}>🔄 Buscar actualización</Text>}
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -236,6 +256,11 @@ const styles = (c) => StyleSheet.create({
   },
   conexionRow:    { flexDirection: 'row', alignItems: 'center', gap: 6 },
   conexionTxt:    { fontSize: 12, fontWeight: '600' },
+  versionRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#1c1c1c' },
+  versionTxt:     { color: '#555', fontSize: 11 },
+  updateBtn:      { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1a1a1a', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: '#333', minWidth: 44, minHeight: 30, justifyContent: 'center' },
+  updateBtnDisabled: { opacity: 0.5 },
+  updateBtnTxt:   { color: '#F5A623', fontSize: 12, fontWeight: '600' },
 
   sectionTitle: {
     color: c.textSec,

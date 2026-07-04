@@ -96,34 +96,58 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
       Alert.alert('Foto requerida', 'Debes tomar una foto del hogar para registrar la visita.');
       return;
     }
-    const promesaFecha = resultado === 'promesa_pago' ? calcPromesaFecha() : null;
-    if (resultado === 'promesa_pago' && !fechaValida(promesaFecha)) {
-      Alert.alert('Fecha inválida', 'La fecha personalizada debe ser futura con formato YYYY-MM-DD.');
-      return;
+    // Calcular fecha promesa dentro del callback para evitar closures stale
+    const calcFecha = () => {
+      if (opcionPromesa === 'custom') {
+        const d = promesaCustomDate;
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      }
+      const d = new Date();
+      d.setDate(d.getDate() + Number(opcionPromesa));
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    };
+    const promesaFecha = resultado === 'promesa_pago' ? calcFecha() : null;
+    if (resultado === 'promesa_pago') {
+      const esValida = /^\d{4}-\d{2}-\d{2}$/.test(promesaFecha) && new Date(promesaFecha) > new Date();
+      if (!esValida) {
+        Alert.alert('Fecha inválida', 'La fecha personalizada debe ser futura con formato YYYY-MM-DD.');
+        return;
+      }
     }
 
     setSubmitting(true);
     try {
-      const form = new FormData();
-      form.append('resultado', resultado);
-      if (observaciones.trim()) form.append('observaciones', observaciones.trim());
-      if (resultado === 'promesa_pago') form.append('promesa_fecha', promesaFecha);
-      if (ubicacion) {
-        form.append('latitud',  String(ubicacion.lat));
-        form.append('longitud', String(ubicacion.lng));
-      }
-      if (foto) {
-        form.append('foto_hogar', {
-          uri: Platform.OS === 'ios' ? foto.uri.replace('file://', '') : foto.uri,
-          type: foto.type,
-          name: foto.name,
-        });
-      }
-
       if (isOnline) {
-        const { data } = await api.post(`/cobros/clientes/${cliente.id}/visita`, form, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        });
+        let payload;
+        let headers = {};
+
+        if (esSinEvidencia) {
+          // Sin foto — enviar como JSON normal
+          payload = {
+            resultado,
+            ...(observaciones.trim() && { observaciones: observaciones.trim() }),
+          };
+          headers = { 'Content-Type': 'application/json' };
+        } else {
+          // Con foto — multipart/form-data
+          const form = new FormData();
+          form.append('resultado', resultado);
+          if (observaciones.trim()) form.append('observaciones', observaciones.trim());
+          if (resultado === 'promesa_pago') form.append('promesa_fecha', promesaFecha);
+          if (ubicacion) {
+            form.append('latitud',  String(ubicacion.lat));
+            form.append('longitud', String(ubicacion.lng));
+          }
+          form.append('foto_hogar', {
+            uri: Platform.OS === 'ios' ? foto.uri.replace('file://', '') : foto.uri,
+            type: foto.type,
+            name: foto.name,
+          });
+          payload = form;
+          headers = { 'Content-Type': 'multipart/form-data' };
+        }
+
+        const { data } = await api.post(`/cobros/clientes/${cliente.id}/visita`, payload, { headers });
         await guardarEnHistorial({
           clienteId: cliente.id, clienteNombre: cliente.nombre,
           clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
@@ -146,7 +170,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
             resultado,
             ...(observaciones.trim() && { observaciones: observaciones.trim() }),
             ...(resultado === 'promesa_pago' && { promesa_fecha: promesaFecha }),
-            ...(ubicacion && { latitud: ubicacion.lat, longitud: ubicacion.lng }),
+            ...(!esSinEvidencia && ubicacion && { latitud: ubicacion.lat, longitud: ubicacion.lng }),
           },
         });
         await guardarEnHistorial({
