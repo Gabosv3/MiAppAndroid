@@ -29,6 +29,7 @@ const VISITA_INFO = {
   sin_pago:      { label: 'Estaba pero no pagó', icon: '🚫', color: '#e65100', bg: '#fff3e0' },
   promesa_pago:  { label: 'Prometió pagar',      icon: '🤝', color: '#2e7d32', bg: '#e8f5e9' },
   rechazo:       { label: 'Se negó a atender',   icon: '⛔', color: '#c62828', bg: '#ffebee' },
+  abono_previo:  { label: 'Ya abonó mensualidad',icon: '✅', color: '#00695c', bg: '#e0f2f1' },
 };
 
 const buildReciboHtml = ({ clienteNombre, ventaNumero, monto, metodo, proximaVisita, fecha }) => {

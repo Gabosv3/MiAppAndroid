@@ -201,12 +201,22 @@ export default function RegistrarPagoScreen({ navigation, route }) {
           [
             { text: 'Cancelar', style: 'cancel' },
             { text: 'Guardar offline', onPress: async () => {
-              await encolarPago({
+              const proxVisita = calcProximaVisita();
+              const pagoEncolado = await encolarPago({
                 clienteId: cliente.id, clienteNombre: cliente.nombre,
                 ventaId, ventaNumero,
                 monto: montoNum, metodo,
                 referencia: referencia.trim(), notas: notas.trim(),
               });
+              await guardarEnHistorial({
+                clienteId: cliente.id, clienteNombre: cliente.nombre,
+                clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
+                ventaNumero, monto: montoNum, metodo,
+                proximaVisitaFecha: proxVisita,
+                pagoOfflineId: pagoEncolado.id,
+                resultado: { ok: true, mensaje: 'Cobro pendiente de envío (offline)', proxima_cuota: null },
+              });
+              await marcarClienteVisitado(cliente.id);
               navigation.goBack();
             }},
           ]

@@ -3,6 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import api, { setAuthToken, clearAuthToken } from '../services/api';
 import { startHeartbeat, stopHeartbeat } from '../services/posHeartbeat';
 import { verificarActualizacion } from '../services/updateChecker';
+import { limpiarCacheOffline } from '../services/cobrosOffline';
+import { clearQueue } from '../services/offlineQueue';
 
 const AuthContext = createContext();
 const STORAGE_KEY_AUTH = '@miapp/auth';
@@ -160,7 +162,12 @@ export function AuthProvider({ children }) {
     clearAuthToken();
     setUser(null);
     setError(null);
-    await AsyncStorage.removeItem(STORAGE_KEY_AUTH);
+    // Limpiar datos del cobrador anterior para que el siguiente no los vea
+    await Promise.all([
+      AsyncStorage.removeItem(STORAGE_KEY_AUTH),
+      limpiarCacheOffline(),
+      clearQueue(),
+    ]);
   };
 
   return (

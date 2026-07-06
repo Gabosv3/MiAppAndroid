@@ -168,6 +168,20 @@ export const marcarClienteVisitado = async (clienteId) => {
   await AsyncStorage.setItem(KEYS.visitados, JSON.stringify(store));
 };
 
+// Borra toda la caché offline del cobrador — llamar al hacer logout
+// para que el siguiente usuario no vea datos del anterior.
+// NO borra pagos pendientes de envío (COBROS_PAGOS_PENDIENTES) para no perder
+// cobros que aún no se sincronizaron.
+export const limpiarCacheOffline = async () => {
+  await AsyncStorage.multiRemove([
+    KEYS.ruta,
+    KEYS.clientes,
+    KEYS.historial,
+    KEYS.orden,
+    KEYS.visitados,
+  ]);
+};
+
 export const leerClientesVisitadosHoy = async () => {
   const raw = await AsyncStorage.getItem(KEYS.visitados);
   if (!raw) return [];

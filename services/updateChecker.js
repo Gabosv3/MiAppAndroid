@@ -1,7 +1,9 @@
 import { Alert, Linking } from 'react-native';
 import Constants from 'expo-constants';
+import api from './api';
 
-const VERSION_URL = 'https://panel.distribuidorabriancescomenjivar.com/update/version.json';
+// Usa el endpoint autenticado de la API — el servidor lee version.json o cae al fallback configurado
+const VERSION_ENDPOINT = '/version';
 
 // Compara versiones tipo "1.0.0" — retorna true si remota > local
 const esVersionMayor = (remota, local) => {
@@ -19,19 +21,8 @@ const esVersionMayor = (remota, local) => {
 export const verificarActualizacion = async ({ manual = false } = {}) => {
   try {
     const versionActual = Constants.expoConfig?.version || '1.0.0';
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    let res;
-    try {
-      res = await fetch(VERSION_URL, { cache: 'no-store', signal: controller.signal });
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!res.ok) {
-      if (manual) Alert.alert('Sin respuesta', 'No se pudo contactar el servidor de actualizaciones.');
-      return;
-    }
-    const { version, url, notas } = await res.json();
+    const { data } = await api.get(VERSION_ENDPOINT, { timeout: 8000 });
+    const { version, url, notas } = data || {};
     if (!version || !url) {
       if (manual) Alert.alert('Sin respuesta', 'El servidor no devolvió información de versión.');
       return;
@@ -50,7 +41,7 @@ export const verificarActualizacion = async ({ manual = false } = {}) => {
       ],
       { cancelable: true }
     );
-  } catch {
+  } catch (e) {
     if (manual) Alert.alert('Sin conexión', 'No se pudo verificar actualizaciones. Revisa tu conexión.');
   }
 };

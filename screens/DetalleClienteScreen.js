@@ -27,6 +27,10 @@ export default function DetalleClienteScreen({ navigation, route }) {
   const [modalRei,      setModalRei]      = useState(null); // { ventaId, ventaNumero }
   const [reiMotivo,     setReiMotivo]     = useState('');
   const [savingRei,     setSavingRei]     = useState(false);
+  const [modalNombre,   setModalNombre]   = useState(false);
+  const [editNombre,    setEditNombre]    = useState('');
+  const [editApellido,  setEditApellido]  = useState('');
+  const [savingNombre,  setSavingNombre]  = useState(false);
   const { isOnline } = useConnectivity();
 
   const cargar = useCallback(async () => {
@@ -141,6 +145,41 @@ export default function DetalleClienteScreen({ navigation, route }) {
     setModalTel(true);
   };
 
+  const abrirModalNombre = () => {
+    // Separar nombre completo en nombre y apellido si el servidor los devuelve juntos
+    const partes = (cliente?.nombre || '').trim().split(/\s+/);
+    setEditNombre(cliente?.nombre_solo || partes[0] || '');
+    setEditApellido(cliente?.apellido || partes.slice(1).join(' ') || '');
+    setModalNombre(true);
+  };
+
+  const guardarNombre = async () => {
+    const n = editNombre.trim();
+    const a = editApellido.trim();
+    if (!n && !a) {
+      Alert.alert('Error', 'Ingresa al menos el nombre o el apellido.');
+      return;
+    }
+    setSavingNombre(true);
+    try {
+      const { data: resp } = await api.patch(`/clientes/${clienteId}/nombre`, {
+        ...(n && { nombre: n }),
+        ...(a && { apellido: a }),
+      });
+      setModalNombre(false);
+      // Actualizar nombre en pantalla sin recargar todo
+      setData(prev => ({
+        ...prev,
+        cliente: { ...prev.cliente, nombre: resp.cliente?.nombre_completo || `${n} ${a}`.trim() },
+      }));
+      Alert.alert('✅ Listo', 'Nombre actualizado correctamente.');
+    } catch (e) {
+      Alert.alert('Error', e?.response?.data?.message || 'No se pudo actualizar el nombre.');
+    } finally {
+      setSavingNombre(false);
+    }
+  };
+
   return (
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0"/>
@@ -187,7 +226,12 @@ export default function DetalleClienteScreen({ navigation, route }) {
                 <Text style={s.clienteAvatarTxt}>{initials(cliente?.nombre)}</Text>
               </View>
               <View style={{flex:1,marginLeft:14}}>
-                <Text style={s.clienteNombre}>{cliente?.nombre}</Text>
+                <View style={{flexDirection:'row',alignItems:'center',gap:8,marginBottom:6}}>
+                  <Text style={[s.clienteNombre,{marginBottom:0}]} numberOfLines={2}>{cliente?.nombre}</Text>
+                  <TouchableOpacity onPress={abrirModalNombre} hitSlop={{top:8,bottom:8,left:8,right:8}}>
+                    <Text style={{fontSize:16}}>✏️</Text>
+                  </TouchableOpacity>
+                </View>
                 {cliente?.dui       && <Text style={s.clienteInfo}>DUI:       {cliente.dui}</Text>}
                 {cliente?.telefono  && <Text style={s.clienteInfo}>Tel:       {cliente.telefono}</Text>}
                 {cliente?.direccion && <Text style={s.clienteInfo}>Dirección: {cliente.direccion}</Text>}
@@ -361,6 +405,47 @@ export default function DetalleClienteScreen({ navigation, route }) {
               <Text style={s.guardarBtnTxt}>{savingRei ? 'Enviando...' : '📦 Confirmar reintegro'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={s.cancelBtn} onPress={() => setModalRei(null)}>
+              <Text style={s.cancelBtnTxt}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal editar nombre */}
+      <Modal visible={modalNombre} transparent animationType="slide" onRequestClose={() => setModalNombre(false)}>
+        <View style={s.modalOverlay}>
+          <View style={s.modalBox}>
+            <Text style={s.modalTitle}>✏️ Editar nombre</Text>
+            <Text style={s.modalSub}>{cliente?.nombre}</Text>
+
+            <Text style={s.modalLabel}>Nombre *</Text>
+            <TextInput
+              style={s.modalInput}
+              value={editNombre}
+              onChangeText={setEditNombre}
+              placeholder="Ej: Maria"
+              autoCapitalize="words"
+              maxLength={80}
+            />
+
+            <Text style={s.modalLabel}>Apellido *</Text>
+            <TextInput
+              style={s.modalInput}
+              value={editApellido}
+              onChangeText={setEditApellido}
+              placeholder="Ej: Hernandez"
+              autoCapitalize="words"
+              maxLength={80}
+            />
+
+            <TouchableOpacity
+              style={[s.guardarBtn, savingNombre && { opacity: 0.6 }]}
+              onPress={guardarNombre}
+              disabled={savingNombre}
+            >
+              <Text style={s.guardarBtnTxt}>{savingNombre ? 'Guardando...' : '💾 Guardar nombre'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.cancelBtn} onPress={() => setModalNombre(false)}>
               <Text style={s.cancelBtnTxt}>Cancelar</Text>
             </TouchableOpacity>
           </View>

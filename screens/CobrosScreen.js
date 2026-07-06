@@ -32,6 +32,9 @@ export default function CobrosScreen({ navigation }) {
   // Modo reordenación
   const [modoReorden, setModoReorden] = useState(false);
   const [pickedId,    setPickedId]    = useState(null);
+  // Búsqueda global (todas las rutas del cobrador)
+  const [buscandoGlobal, setBuscandoGlobal] = useState(false);
+  const [resultadosGlobal, setResultadosGlobal] = useState(null); // null = sin buscar, [] = sin resultados
   const { isOnline } = useConnectivity();
 
   const cargar = useCallback(async () => {
@@ -116,8 +119,7 @@ export default function CobrosScreen({ navigation }) {
     return arr;
   }, [todos, todosOrdenados, query, rutaId, visitadosIds]);
 
-  // Persiste el nuevo orden basado en la lista visible actual,
-  // preservando la posición de clientes visitados (todosOrdenados).
+  // Persiste el nuevo orden localmente y en el servidor para cada ruta afectada.
   const persistirOrden = useCallback(async (nuevaLista) => {
     const nuevosIds = nuevaLista.map(c => c.id);
     const nuevosSet = new Set(nuevosIds);
@@ -130,9 +132,29 @@ export default function CobrosScreen({ navigation }) {
       }
       return c.id;
     });
+    // Guardar local siempre (funciona offline)
     setOrdenIds(ordenCompleto);
     await guardarOrdenClientes(ordenCompleto);
-  }, [todosOrdenados]);
+    // Sincronizar con servidor si hay conexión — una llamada por ruta afectada
+    if (isOnline) {
+      try {
+        // Agrupar IDs por ruta para respetar el endpoint POST /rutas/{ruta_id}/orden
+        const porRuta = {};
+        nuevaLista.forEach(c => {
+          if (!porRuta[c.rutaId]) porRuta[c.rutaId] = [];
+          porRuta[c.rutaId].push(c.id);
+        });
+        await Promise.all(
+          Object.entries(porRuta).map(([rutaId, ids]) =>
+            api.post(`/cobros/rutas/${rutaId}/orden`, { ids })
+          )
+        );
+      } catch (e) {
+        // Fallo silencioso — el orden local ya quedó guardado
+        console.warn('No se pudo sincronizar orden con servidor:', e.message);
+      }
+    }
+  }, [todosOrdenados, isOnline]);
 
   // Toca un cliente en modo reordenación:
   //   - Si no hay ninguno seleccionado → lo selecciona (picked)
@@ -158,6 +180,25 @@ export default function CobrosScreen({ navigation }) {
     setPickedId(null);
     await persistirOrden(nueva);
   }, [pickedId, lista, persistirOrden]);
+
+  const buscarEnTodasLasRutas = useCallback(async () => {
+    if (!query.trim() || !isOnline) return;
+    setBuscandoGlobal(true);
+    try {
+      const { data } = await api.get('/cobros/clientes/buscar', { params: { codigo: query.trim() } });
+      setResultadosGlobal(data.clientes || []);
+    } catch {
+      setResultadosGlobal([]);
+    } finally {
+      setBuscandoGlobal(false);
+    }
+  }, [query, isOnline]);
+
+  // Limpiar resultados globales cuando el query cambia
+  const handleQueryChange = (text) => {
+    setQuery(text);
+    setResultadosGlobal(null);
+  };
 
   const entrarReorden = () => {
     setQuery('');
@@ -416,10 +457,10 @@ export default function CobrosScreen({ navigation }) {
                 placeholder="Buscar por nombre, código o teléfono..."
                 placeholderTextColor="#aaa"
                 value={query}
-                onChangeText={setQuery}
+                onChangeText={handleQueryChange}
               />
               {query.length > 0 && (
-                <TouchableOpacity onPress={() => setQuery('')} hitSlop={{top:8,bottom:8,left:8,right:8}}>
+                <TouchableOpacity onPress={() => handleQueryChange('')} hitSlop={{top:8,bottom:8,left:8,right:8}}>
                   <Text style={{fontSize:16,color:'#aaa'}}>✕</Text>
                 </TouchableOpacity>
               )}
@@ -445,10 +486,57 @@ export default function CobrosScreen({ navigation }) {
                 : undefined
             }
             ListEmptyComponent={
-              <View style={{alignItems:'center',paddingVertical:60}}>
+              <View style={{alignItems:'center',paddingVertical:40,paddingHorizontal:16}}>
                 <Text style={{fontSize:44,marginBottom:10}}>🔍</Text>
-                <Text style={{fontSize:15,fontWeight:'700',color:'#444'}}>Sin resultados</Text>
-                <Text style={{color:'#aaa',marginTop:4}}>Intenta con otro término</Text>
+                <Text style={{fontSize:15,fontWeight:'700',color:'#444'}}>Sin resultados en la ruta de hoy</Text>
+                {query.trim().length > 0 && isOnline && (
+                  <>
+                    {resultadosGlobal === null ? (
+                      <TouchableOpacity
+                        style={s.buscarGlobalBtn}
+                        onPress={buscarEnTodasLasRutas}
+                        disabled={buscandoGlobal}
+                      >
+                        {buscandoGlobal
+                          ? <ActivityIndicator size="small" color="#1565C0" />
+                          : <Text style={s.buscarGlobalTxt}>🌐 Buscar en todas mis rutas</Text>}
+                      </TouchableOpacity>
+                    ) : resultadosGlobal.length === 0 ? (
+                      <Text style={{color:'#aaa',marginTop:12}}>No se encontró en ninguna ruta</Text>
+                    ) : (
+                      <View style={{width:'100%',marginTop:16}}>
+                        <Text style={{color:'#666',fontSize:12,fontWeight:'700',marginBottom:8}}>
+                          ENCONTRADO EN OTRAS RUTAS ({resultadosGlobal.length})
+                        </Text>
+                        {resultadosGlobal.map(c => {
+                          const color = avatarColor(c.nombre);
+                          return (
+                            <TouchableOpacity
+                              key={c.id}
+                              style={s.globalCard}
+                              onPress={() => navigation.navigate('DetalleCliente', { clienteId: c.id, clienteNombre: c.nombre })}
+                            >
+                              <View style={[s.avatar, {backgroundColor: color, width:40, height:40, borderRadius:20}]}>
+                                <Text style={s.avatarTxt}>{initials(c.nombre)}</Text>
+                              </View>
+                              <View style={{flex:1,marginLeft:12}}>
+                                <Text style={{fontSize:14,fontWeight:'700',color:'#1a1a1a'}}>{c.nombre}</Text>
+                                <Text style={{fontSize:12,color:'#888'}}>
+                                  Código: {c.codigo_anterior}  ·  {c.ruta?.nombre}
+                                </Text>
+                                {c.telefono ? <Text style={{fontSize:12,color:'#aaa'}}>Tel: {c.telefono}</Text> : null}
+                              </View>
+                              <View style={{alignItems:'flex-end'}}>
+                                <Text style={{fontSize:13,fontWeight:'800',color:'#e53e3e'}}>{fmt(c.saldo_total)}</Text>
+                                <Text style={{fontSize:10,color:'#aaa',marginTop:2}}>{c.ruta?.dia_semana}</Text>
+                              </View>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    )}
+                  </>
+                )}
               </View>
             }
           />
@@ -529,6 +617,19 @@ const s = StyleSheet.create({
   btnOutlineTxt:{ color:'#1565C0', fontWeight:'700', fontSize:14 },
   btnSolid:  { flex:1, borderRadius:10, paddingVertical:11, backgroundColor:'#1565C0', alignItems:'center' },
   btnSolidTxt:{ color:'#fff', fontWeight:'700', fontSize:14 },
+
+  buscarGlobalBtn: {
+    marginTop:16, backgroundColor:'#e3f2fd', borderRadius:12,
+    paddingHorizontal:20, paddingVertical:12,
+    borderWidth:1, borderColor:'#90caf9', minWidth:44, minHeight:44, alignItems:'center',
+  },
+  buscarGlobalTxt: { color:'#1565C0', fontWeight:'700', fontSize:14 },
+  globalCard: {
+    flexDirection:'row', alignItems:'center', backgroundColor:'#fff',
+    borderRadius:14, padding:14, marginBottom:8,
+    elevation:2, shadowColor:'#000', shadowOffset:{width:0,height:1}, shadowOpacity:0.07,
+    borderWidth:1, borderColor:'#e8e8e8',
+  },
 
   /* ── Modo reordenar ── */
   cardPicked: {

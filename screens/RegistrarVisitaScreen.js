@@ -166,11 +166,13 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
           method: 'POST',
           url: `/cobros/clientes/${cliente.id}/visita`,
           label: `Visita ${cliente.nombre}`,
+          useFormData: !esSinEvidencia,
           data: {
             resultado,
             ...(observaciones.trim() && { observaciones: observaciones.trim() }),
             ...(resultado === 'promesa_pago' && { promesa_fecha: promesaFecha }),
-            ...(!esSinEvidencia && ubicacion && { latitud: ubicacion.lat, longitud: ubicacion.lng }),
+            ...(!esSinEvidencia && ubicacion && { latitud: String(ubicacion.lat), longitud: String(ubicacion.lng) }),
+            ...(!esSinEvidencia && foto && { foto_hogar: { uri: foto.uri, type: foto.type || 'image/jpeg', name: foto.name || 'foto_hogar.jpg' } }),
           },
         });
         await guardarEnHistorial({
@@ -183,7 +185,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
         await marcarClienteVisitado(cliente.id);
         Alert.alert(
           '📴 Guardado sin conexión',
-          'La visita se enviará cuando recuperes la señal. La foto se adjuntará al reconectarte.',
+          'La visita (con foto) se enviará automáticamente cuando recuperes la señal.',
           [{ text: 'OK', onPress: () => navigation.goBack() }]
         );
       }
