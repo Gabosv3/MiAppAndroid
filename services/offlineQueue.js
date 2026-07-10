@@ -103,13 +103,11 @@ export const syncQueue = async () => {
       const requestData = item.useFormData ? buildFormData(item.data) : item.data;
       console.log(`   📦 Datos preparados`);
 
-      // Agregar timeout de 15 segundos
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => {
-          const err = new Error('Timeout - 15s sin respuesta');
-          reject(err);
-        }, 15000)
-      );
+      // Agregar timeout de 15 segundos — el timer se limpia siempre para no quedar colgado
+      let timeoutHandle;
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error('Timeout - 15s sin respuesta')), 15000);
+      });
 
       const requestPromise = api.request({
         method: item.method,
@@ -119,7 +117,12 @@ export const syncQueue = async () => {
       });
 
       console.log(`   ⏳ Esperando respuesta...`);
-      const response = await Promise.race([requestPromise, timeoutPromise]);
+      let response;
+      try {
+        response = await Promise.race([requestPromise, timeoutPromise]);
+      } finally {
+        clearTimeout(timeoutHandle);
+      }
       console.log(`   ✅ Respuesta recibida:`, response?.status || 200);
 
       await removeRequest(item.id);

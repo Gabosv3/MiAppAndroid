@@ -1,19 +1,20 @@
-import { useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import api from './api';
 
 const checkConnectivity = async () => {
   try {
-    // Usar timeout corto para no bloquear la UI
     await api.get('/me', { timeout: 5000 });
     return true;
   } catch (e) {
-    // Si el servidor respondió (aunque con error 401), estamos online
     if (e.response) return true;
     return false;
   }
 };
 
-export const useConnectivity = () => {
+const ConnectivityContext = createContext({ isOnline: true, checking: false, check: () => {} });
+
+// Un único intervalo para toda la app — no uno por pantalla montada
+export function ConnectivityProvider({ children }) {
   const [isOnline, setIsOnline] = useState(true);
   const [checking, setChecking] = useState(false);
 
@@ -30,5 +31,11 @@ export const useConnectivity = () => {
     return () => clearInterval(interval);
   }, [check]);
 
-  return { isOnline, checking, check };
-};
+  return (
+    <ConnectivityContext.Provider value={{ isOnline, checking, check }}>
+      {children}
+    </ConnectivityContext.Provider>
+  );
+}
+
+export const useConnectivity = () => useContext(ConnectivityContext);

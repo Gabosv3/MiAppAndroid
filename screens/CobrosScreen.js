@@ -371,17 +371,11 @@ export default function CobrosScreen({ navigation }) {
               </TouchableOpacity>
             ) : (
               <>
-                <TouchableOpacity style={s.mapBtn} onPress={entrarReorden}>
-                  <Text style={s.mapBtnTxt}>⇅ Orden</Text>
-                </TouchableOpacity>
                 <TouchableOpacity style={s.mapBtn} onPress={() => navigation.navigate('Home')}>
                   <Text style={s.mapBtnTxt}>🏠</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={s.mapBtn} onPress={() => navigation.navigate('HistorialDia')}>
                   <Text style={s.mapBtnTxt}>📋</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={s.mapBtn} onPress={() => navigation.navigate('MapaCobros', { clientes: todos })}>
-                  <Text style={s.mapBtnTxt}>🗺️</Text>
                 </TouchableOpacity>
               </>
             )}
@@ -392,6 +386,12 @@ export default function CobrosScreen({ navigation }) {
             <View style={s.chip}><Text style={s.chipTxt}>📍 {totalRutas} ruta{totalRutas!==1?'s':''}</Text></View>
             <View style={s.chip}><Text style={s.chipTxt}>👥 {totalClientes} clientes</Text></View>
             {pagosPend > 0 && <View style={s.chipPend}><Text style={s.chipPendTxt}>⏳ {pagosPend} por sync</Text></View>}
+            <TouchableOpacity style={s.chipBtn} onPress={() => navigation.navigate('MapaCobros', { clientes: todos })}>
+              <Text style={s.chipBtnTxt}>🗺️ Mapa</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.chipBtn} onPress={entrarReorden}>
+              <Text style={s.chipBtnTxt}>⇅ Orden</Text>
+            </TouchableOpacity>
           </View>
         )}
       </View>
@@ -566,6 +566,8 @@ const s = StyleSheet.create({
   chipTxt:     { color:'#fff', fontSize:12, fontWeight:'600' },
   chipPend:    { backgroundColor:'#F5A623', borderRadius:20, paddingHorizontal:14, paddingVertical:6 },
   chipPendTxt: { color:'#fff', fontSize:12, fontWeight:'700' },
+  chipBtn:     { backgroundColor:'rgba(255,255,255,0.25)', borderRadius:20, paddingHorizontal:14, paddingVertical:6, borderWidth:1, borderColor:'rgba(255,255,255,0.4)' },
+  chipBtnTxt:  { color:'#fff', fontSize:12, fontWeight:'700' },
   offlineBanner:{ backgroundColor:'#fff3cd', paddingHorizontal:16, paddingVertical:10, borderBottomWidth:1, borderBottomColor:'#ffeaa7' },
   offlineTxt:  { color:'#856404', fontSize:12, fontWeight:'600', textAlign:'center' },
   bannerReorden:{ backgroundColor:'#e3f2fd', borderBottomColor:'#90caf9' },

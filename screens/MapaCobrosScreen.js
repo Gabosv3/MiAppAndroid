@@ -58,14 +58,27 @@ const buildMapHtml = (clientes, region) => {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <style>
     html, body, #map { height:100%; width:100%; margin:0; padding:0; }
     .leaflet-control-attribution { font-size:8px; }
+    /* Cluster personalizado por color dominante */
+    .cluster-verde   { background:rgba(46,125,50,0.85);  }
+    .cluster-naranja { background:rgba(245,166,35,0.85); }
+    .cluster-rojo    { background:rgba(229,62,62,0.85);  }
+    .cluster-icon {
+      border-radius:50%; border:3px solid #fff;
+      display:flex; align-items:center; justify-content:center;
+      color:#fff; font-weight:800; font-size:14px;
+      box-shadow:0 2px 6px rgba(0,0,0,0.35);
+    }
   </style>
 </head>
 <body>
   <div id="map"></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
   <script>
     var map = L.map('map', { zoomControl: true }).setView(
       [${region.latitude}, ${region.longitude}],
@@ -79,26 +92,53 @@ const buildMapHtml = (clientes, region) => {
     var puntos = ${JSON.stringify(puntos)};
     var bounds = [];
 
+    // Cluster que elige color según la urgencia más alta del grupo
+    var cluster = L.markerClusterGroup({
+      maxClusterRadius: 50,
+      iconCreateFunction: function(c) {
+        var markers = c.getAllChildMarkers();
+        var tieneRojo   = markers.some(function(m){ return m.options.fillColor === '#e53e3e'; });
+        var tieneNaranja= markers.some(function(m){ return m.options.fillColor === '#F5A623'; });
+        var cls = tieneRojo ? 'cluster-rojo' : tieneNaranja ? 'cluster-naranja' : 'cluster-verde';
+        var size = c.getChildCount() > 9 ? 46 : 38;
+        return L.divIcon({
+          html: '<div class="cluster-icon ' + cls + '" style="width:' + size + 'px;height:' + size + 'px">' + c.getChildCount() + '</div>',
+          className: '',
+          iconSize: [size, size],
+          iconAnchor: [size/2, size/2],
+        });
+      },
+      spiderfyOnMaxZoom: true,
+      showCoverageOnHover: false,
+      zoomToBoundsOnClick: true,
+    });
+
     puntos.forEach(function (p) {
       var marker = L.circleMarker([p.lat, p.lng], {
-        radius: 10, color: '#fff', weight: 2,
-        fillColor: p.color, fillOpacity: 0.95
-      }).addTo(map);
+        radius: 12, color: '#fff', weight: 2.5,
+        fillColor: p.color, fillOpacity: 0.95,
+      });
+      marker.options.fillColor = p.color; // para leer en iconCreateFunction
       marker.on('click', function () {
         window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'marker', id: p.id }));
       });
+      cluster.addLayer(marker);
       bounds.push([p.lat, p.lng]);
     });
 
+    map.addLayer(cluster);
+
     if (bounds.length > 1) {
       map.fitBounds(bounds, { padding: [40, 40] });
+    } else if (bounds.length === 1) {
+      map.setView(bounds[0], 16);
     }
 
-    // Ubicación del dispositivo (si el navegador la concede)
+    // Ubicación del dispositivo
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(function (pos) {
         L.circleMarker([pos.coords.latitude, pos.coords.longitude], {
-          radius: 7, color: '#fff', weight: 2, fillColor: '#1565C0', fillOpacity: 1
+          radius: 8, color: '#fff', weight: 2, fillColor: '#1565C0', fillOpacity: 1
         }).addTo(map).bindPopup('Tu ubicación');
       });
     }

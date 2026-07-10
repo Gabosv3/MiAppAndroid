@@ -107,11 +107,11 @@ export default function NuevaVentaScreen({ navigation }) {
     const descVal = parseFloat(descuento) || 0;
     const descPct = subtotal > 0 ? (descVal / subtotal) * 100 : 0;
     const total = Math.max(0, subtotal - descVal);
-    const pagoVal = (usarPrima || tipoPago === 'contado') ? (parseFloat(pago) || 0) : 0;
-    const vuelto = Math.max(0, pagoVal - total);
     const anyCredito = carrito.some(i => Number(i.cuotas) > 0);
     const allCredito = carrito.length > 0 && carrito.every(i => Number(i.cuotas) > 0);
     const tipoPago = anyCredito ? 'credito' : 'contado';
+    const pagoVal = (usarPrima || tipoPago === 'contado') ? (parseFloat(pago) || 0) : 0;
+    const vuelto = Math.max(0, pagoVal - total);
     const esMixto = anyCredito && !allCredito;
 
     return { subtotal, descVal, descPct, total, pagoVal, vuelto, tipoPago, esMixto };
