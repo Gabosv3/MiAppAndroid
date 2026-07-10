@@ -14,7 +14,10 @@ import {
   ActivityIndicator,
   Modal,
   Platform,
+  Switch,
+  Image,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
@@ -27,6 +30,9 @@ import { Asset } from 'expo-asset';
 import escpos from '../services/escpos';
 import * as offlineQueue from '../services/offlineQueue';
 import { useConnectivity } from '../services/connectivity';
+import * as Location from 'expo-location';
+import * as ImagePicker from 'expo-image-picker';
+import { extractTextFromImage } from '../services/ocr';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -96,6 +102,216 @@ export default function NuevaVentaScreen({ navigation }) {
   const [printerModalVisible, setPrinterModalVisible] = useState(false);
   const [printerAddr, setPrinterAddr] = useState('');
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
+
+  // ── Crear Cliente integrado ─────────────────────────────────────────────────
+  const [crearClienteVisible, setCrearClienteVisible] = useState(false);
+  const [ccNombre, setCcNombre] = useState('');
+  const [ccApellido, setCcApellido] = useState('');
+  const [ccDui, setCcDui] = useState('');
+  const [ccTelefono, setCcTelefono] = useState('');
+  const [ccWhatsapp, setCcWhatsapp] = useState('');
+  const [ccEmail, setCcEmail] = useState('');
+  const [ccLatitud, setCcLatitud] = useState('');
+  const [ccLongitud, setCcLongitud] = useState('');
+  const [ccFotoCasa, setCcFotoCasa] = useState(null);
+  const [ccDuiFrente, setCcDuiFrente] = useState(null);
+  const [ccDuiReverso, setCcDuiReverso] = useState(null);
+  const [ccLoading, setCcLoading] = useState(false);
+  const [ccLocationLoading, setCcLocationLoading] = useState(false);
+  const [ccScanningOcr, setCcScanningOcr] = useState(false);
+  const [ccPreviewVisible, setCcPreviewVisible] = useState(false);
+  const [ccPreviewImage, setCcPreviewImage] = useState(null);
+  const [ccEmailRequerido, setCcEmailRequerido] = useState(false);
+  const [ccNombreError, setCcNombreError] = useState('');
+  const [ccApellidoError, setCcApellidoError] = useState('');
+  const [ccDuiError, setCcDuiError] = useState('');
+  const [ccTelefonoError, setCcTelefonoError] = useState('');
+  const [ccWhatsappError, setCcWhatsappError] = useState('');
+  const [ccEmailError, setCcEmailError] = useState('');
+  const [ccLatError, setCcLatError] = useState('');
+  const [ccLongError, setCcLongError] = useState('');
+  const [ccFrenteError, setCcFrenteError] = useState('');
+  const [ccReversoError, setCcReversoError] = useState('');
+
+  const ccDuiRegex = /^\d{8}-\d$/;
+  const ccPhoneRegex = /^\d{4}-\d{4}$/;
+
+  const ccFormatDui = (v) => { const d = v.replace(/\D/g,'').slice(0,9); return d.length<=8?d:`${d.slice(0,8)}-${d.slice(8)}`; };
+  const ccFormatPhone = (v) => { const d = v.replace(/\D/g,'').slice(0,8); return d.length<=4?d:`${d.slice(0,4)}-${d.slice(4)}`; };
+
+  const ccReset = () => {
+    setCcNombre(''); setCcApellido(''); setCcDui(''); setCcTelefono('');
+    setCcWhatsapp(''); setCcEmail(''); setCcLatitud(''); setCcLongitud('');
+    setCcFotoCasa(null); setCcDuiFrente(null); setCcDuiReverso(null);
+    setCcNombreError(''); setCcApellidoError(''); setCcDuiError('');
+    setCcTelefonoError(''); setCcWhatsappError(''); setCcEmailError('');
+    setCcLatError(''); setCcLongError(''); setCcFrenteError(''); setCcReversoError('');
+  };
+
+  useEffect(() => {
+    AsyncStorage.getItem('POS_CONFIG').then(raw => {
+      if (raw) { try { setCcEmailRequerido(!!JSON.parse(raw).emailRequerido); } catch {} }
+    });
+  }, []);
+
+  const ccHandleDuiChange = (t) => {
+    const f = ccFormatDui(t); setCcDui(f);
+    if (!f) setCcDuiError('Requerido');
+    else if (!ccDuiRegex.test(f)) setCcDuiError('Formato: 12345678-9');
+    else setCcDuiError('');
+  };
+  const ccHandleTelChange = (t) => { const f=ccFormatPhone(t); setCcTelefono(f); setCcTelefonoError(!f?'Requerido':!ccPhoneRegex.test(f)?'Formato: 1234-5678':''); };
+  const ccHandleWaChange  = (t) => { const f=ccFormatPhone(t); setCcWhatsapp(f);  setCcWhatsappError(!f?'Requerido':!ccPhoneRegex.test(f)?'Formato: 1234-5678':''); };
+
+  const ccEscanearDui = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') { Alert.alert('Permiso requerido','Necesitamos acceso a la cámara.'); return; }
+      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 1.0 });
+      if (!result.canceled && result.assets?.[0]) {
+        setCcScanningOcr(true);
+        try {
+          const datos = await extractTextFromImage(result.assets[0].uri);
+          if (datos) {
+            const campos = [];
+            if (datos.dui && !ccDui)       { ccHandleDuiChange(datos.dui);                    campos.push(`✅ DUI: ${datos.dui}`); }
+            if (datos.nombre && !ccNombre) { setCcNombre(datos.nombre); setCcNombreError(''); campos.push(`✅ Nombre: ${datos.nombre}`); }
+            if (datos.apellido && !ccApellido) { setCcApellido(datos.apellido); setCcApellidoError(''); campos.push(`✅ Apellido: ${datos.apellido}`); }
+            if (!datos.nombre && !ccNombre)     campos.push('✏️ Nombre: escríbelo manualmente');
+            if (!datos.apellido && !ccApellido) campos.push('✏️ Apellido: escríbelo manualmente');
+            Alert.alert(campos.length?'📋 Resultado':'⚠️ Sin datos', campos.length?campos.join('\n'):'No se pudo leer el DUI.');
+          }
+        } catch(e){ console.warn('OCR:',e.message); } finally { setCcScanningOcr(false); }
+      }
+    } catch(e){ Alert.alert('Error','No se pudo abrir la cámara.'); }
+  };
+
+  const ccTomarFoto = async (tipo) => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') { Alert.alert('Permiso requerido','Necesitamos acceso a la cámara.'); return; }
+      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.8 });
+      if (!result.canceled && result.assets?.[0]) {
+        const file = { uri: result.assets[0].uri, name: `${tipo}_${Date.now()}.jpg`, type: 'image/jpeg' };
+        if (tipo === 'dui_frente')  { setCcDuiFrente(file);  setCcFrenteError(''); }
+        else if (tipo === 'dui_reverso') { setCcDuiReverso(file); setCcReversoError(''); }
+        else if (tipo === 'casa')   { setCcFotoCasa(file); }
+      }
+    } catch(e){ Alert.alert('Error','No se pudo tomar la foto.'); }
+  };
+
+  const ccGetLocation = async () => {
+    setCcLocationLoading(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') { Alert.alert('Permiso denegado','Debe permitir el acceso a la ubicación.'); return; }
+      const pos = await Location.getCurrentPositionAsync({});
+      setCcLatitud(pos.coords.latitude.toString());
+      setCcLongitud(pos.coords.longitude.toString());
+      Alert.alert('✅ Ubicación capturada','Coordenadas registradas correctamente.');
+    } catch(e){ Alert.alert('Error', e.message||'No se pudo obtener la ubicación.'); }
+    finally { setCcLocationLoading(false); }
+  };
+
+  const ccValidate = () => {
+    let ok = true;
+    if (!ccNombre.trim())                { setCcNombreError('Requerido'); ok=false; }
+    if (!ccApellido.trim())              { setCcApellidoError('Requerido'); ok=false; }
+    if (!ccDuiRegex.test(ccDui.trim())) { setCcDuiError('Formato: 12345678-9'); ok=false; }
+    if (!ccPhoneRegex.test(ccTelefono.trim())) { setCcTelefonoError('Formato: 1234-5678'); ok=false; }
+    if (!ccPhoneRegex.test(ccWhatsapp.trim()))  { setCcWhatsappError('Formato: 1234-5678'); ok=false; }
+    if (!ccLatitud.trim())  { setCcLatError('Requerido'); ok=false; }
+    if (!ccLongitud.trim()) { setCcLongError('Requerido'); ok=false; }
+    if (!ccDuiFrente)  { setCcFrenteError('Toma la foto del frente del DUI'); ok=false; }
+    if (!ccDuiReverso) { setCcReversoError('Toma la foto del reverso del DUI'); ok=false; }
+    if (ccEmailRequerido && !ccEmail.trim()) { setCcEmailError('El email es requerido'); ok=false; }
+    else if (ccEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ccEmail.trim())) { setCcEmailError('Formato inválido'); ok=false; }
+    return ok;
+  };
+
+  const ccHandleSubmit = async () => {
+    if (!ccValidate()) return;
+    setCcLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('nombre', ccNombre.trim());
+      formData.append('apellido', ccApellido.trim());
+      formData.append('dui', ccDui.trim());
+      formData.append('telefono_normal', ccTelefono.trim());
+      formData.append('telefono_whatsapp', ccWhatsapp.trim());
+      formData.append('latitud', ccLatitud.trim());
+      formData.append('longitud', ccLongitud.trim());
+      if (ccEmail.trim()) formData.append('email', ccEmail.trim());
+      const appendImg = (field, file) => { if(file?.uri) formData.append(field, { uri:file.uri, name:file.name||`${field}.jpg`, type:'image/jpeg' }); };
+      appendImg('dui_foto_frente', ccDuiFrente);
+      appendImg('dui_foto_reverso', ccDuiReverso);
+      appendImg('foto_casa', ccFotoCasa);
+
+      const { data } = await api.post('/clientes', formData, { timeout:30000, headers:{'Content-Type':'multipart/form-data'} });
+
+      const nombreCompleto = `${data.nombre||ccNombre} ${data.apellido||ccApellido}`.trim();
+      setCliente({ id: data.id, nombre: nombreCompleto, whatsapp: data.telefono_whatsapp||data.telefono_normal||null });
+      setCrearClienteVisible(false);
+      setShowClienteModal(false);
+      setBusquedaCliente('');
+      ccReset();
+      Alert.alert('✅ Cliente creado', `${nombreCompleto} fue agregado y seleccionado.`);
+    } catch(error) {
+      const isOffline = !error.response || error.message==='Sin conexión con el servidor' || error.message==='Tiempo de espera agotado';
+      if (isOffline) {
+        await offlineQueue.enqueueRequest({ method:'POST', url:'/clientes', label:'Crear cliente', useFormData:true,
+          data:{ nombre:ccNombre.trim(), apellido:ccApellido.trim(), dui:ccDui.trim(), telefono_normal:ccTelefono.trim(),
+            telefono_whatsapp:ccWhatsapp.trim(), latitud:ccLatitud.trim(), longitud:ccLongitud.trim(),
+            ...(ccDuiFrente&&{dui_foto_frente:ccDuiFrente}), ...(ccDuiReverso&&{dui_foto_reverso:ccDuiReverso}), ...(ccFotoCasa&&{foto_casa:ccFotoCasa}) } });
+        const nombreCompleto = `${ccNombre} ${ccApellido}`.trim();
+        setCliente({ id: null, nombre: nombreCompleto, whatsapp: ccWhatsapp||ccTelefono||null });
+        setCrearClienteVisible(false);
+        setShowClienteModal(false);
+        setBusquedaCliente('');
+        ccReset();
+        Alert.alert('Guardado offline', 'El cliente se guardó localmente y se sincronizará cuando haya conexión.');
+      } else {
+        const msg = error.response?.data?.errors ? Object.values(error.response.data.errors).flat().join('\n') : error.response?.data?.message || error.message || 'Error al crear cliente.';
+        Alert.alert('Error', msg);
+      }
+    } finally { setCcLoading(false); }
+  };
+
+  // ── Configuraciones POS ─────────────────────────────────────────────────────
+  const CONFIG_KEY = 'POS_CONFIG';
+  const CONFIG_PASSWORD = '01041998';
+  const [configModalVisible, setConfigModalVisible] = useState(false);
+  const [passModalVisible, setPassModalVisible] = useState(false);
+  const [passInput, setPassInput] = useState('');
+  const [passError, setPassError] = useState('');
+  const [cfgEmailRequerido, setCfgEmailRequerido] = useState(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem(CONFIG_KEY).then(raw => {
+      if (raw) {
+        try { const cfg = JSON.parse(raw); setCfgEmailRequerido(!!cfg.emailRequerido); } catch {}
+      }
+    });
+  }, []);
+
+  const guardarConfig = async (nuevaCfg) => {
+    await AsyncStorage.setItem(CONFIG_KEY, JSON.stringify(nuevaCfg));
+  };
+
+  const abrirConfig = () => {
+    setPassInput('');
+    setPassError('');
+    setPassModalVisible(true);
+  };
+
+  const verificarPassword = () => {
+    if (passInput === CONFIG_PASSWORD) {
+      setPassModalVisible(false);
+      setConfigModalVisible(true);
+    } else {
+      setPassError('Contraseña incorrecta');
+    }
+  };
 
   // ── Cálculos memorizados ────────────────────────────────────────────────────
   const cartTotals = useMemo(() => {
@@ -777,6 +993,9 @@ export default function NuevaVentaScreen({ navigation }) {
           ]}>
             <Text style={{ fontSize: 9 }}>{isOnline ? '●' : '●'}</Text>
           </View>
+          <TouchableOpacity onPress={abrirConfig} style={[s.hBtn, { backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 6, paddingHorizontal: 8 }]}>
+            <Text style={[s.hIcon, { fontSize: 12 }]}>⚙️</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => navigation.navigate('HistorialVentas')} style={[s.hBtn, { backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 6, paddingHorizontal: 8 }]}>
             <Text style={[s.hIcon, { fontSize: 12 }]}>📋 Historial</Text>
           </TouchableOpacity>
@@ -785,6 +1004,64 @@ export default function NuevaVentaScreen({ navigation }) {
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* Modal contraseña configuraciones */}
+      <Modal visible={passModalVisible} transparent animationType="fade">
+        <View style={s.cfgOverlay}>
+          <View style={[s.cfgBox, { backgroundColor: colors.surface }]}>
+            <Text style={[s.cfgTitle, { color: colors.text }]}>🔒 Configuraciones</Text>
+            <Text style={[s.cfgSubtitle, { color: colors.textMuted }]}>Ingresa la contraseña de administrador</Text>
+            <TextInput
+              style={[s.cfgInput, { borderColor: passError ? '#e53e3e' : colors.border, color: colors.text, backgroundColor: colors.bg }]}
+              value={passInput}
+              onChangeText={t => { setPassInput(t); setPassError(''); }}
+              secureTextEntry
+              placeholder="Contraseña"
+              placeholderTextColor={colors.textMuted}
+              onSubmitEditing={verificarPassword}
+              autoFocus
+            />
+            {passError ? <Text style={s.cfgError}>{passError}</Text> : null}
+            <View style={s.cfgBtnRow}>
+              <TouchableOpacity style={[s.cfgBtn, { backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border }]} onPress={() => setPassModalVisible(false)}>
+                <Text style={[s.cfgBtnText, { color: colors.text }]}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.cfgBtn, { backgroundColor: colors.accent }]} onPress={verificarPassword}>
+                <Text style={[s.cfgBtnText, { color: '#fff' }]}>Entrar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal configuraciones */}
+      <Modal visible={configModalVisible} transparent animationType="slide">
+        <View style={s.cfgOverlay}>
+          <View style={[s.cfgBox, { backgroundColor: colors.surface }]}>
+            <Text style={[s.cfgTitle, { color: colors.text }]}>⚙️ Configuraciones POS</Text>
+
+            <View style={s.cfgRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[s.cfgRowLabel, { color: colors.text }]}>Requerir email al registrar clientes</Text>
+                <Text style={[s.cfgRowSub, { color: colors.textMuted }]}>Si está activo, el email es obligatorio al crear un cliente nuevo</Text>
+              </View>
+              <Switch
+                value={cfgEmailRequerido}
+                onValueChange={val => {
+                  setCfgEmailRequerido(val);
+                  guardarConfig({ emailRequerido: val });
+                }}
+                trackColor={{ false: colors.border, true: colors.accent }}
+                thumbColor="#fff"
+              />
+            </View>
+
+            <TouchableOpacity style={[s.cfgBtn, { backgroundColor: colors.accent, alignSelf: 'flex-end', marginTop: 16 }]} onPress={() => setConfigModalVisible(false)}>
+              <Text style={[s.cfgBtnText, { color: '#fff' }]}>Cerrar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Modal selección de cuotas */}
       <Modal visible={cuotasModalVisible} animationType="slide" transparent>
@@ -1258,7 +1535,126 @@ export default function NuevaVentaScreen({ navigation }) {
               }}
               ListEmptyComponent={<Text style={{ color: colors.textMuted, textAlign: 'center', padding: 20, fontSize: 12 }}>Sin resultados</Text>}
             />
+            <TouchableOpacity
+              style={[s.crearClienteBtn, { backgroundColor: colors.accent }]}
+              onPress={() => { ccReset(); setCrearClienteVisible(true); }}
+            >
+              <Text style={s.crearClienteBtnText}>➕ Crear nuevo cliente</Text>
+            </TouchableOpacity>
           </View>
+        </View>
+      </Modal>
+
+      {/* Modal crear cliente integrado */}
+      <Modal visible={crearClienteVisible} animationType="slide" transparent={false} onRequestClose={() => setCrearClienteVisible(false)}>
+        <View style={{ flex:1, backgroundColor: colors.bg }}>
+          <View style={[s.header, { paddingTop: Platform.OS==='android'?30:50 }]}>
+            <TouchableOpacity onPress={() => setCrearClienteVisible(false)} style={s.hBtn}>
+              <Text style={s.hIcon}>←</Text>
+            </TouchableOpacity>
+            <Text style={s.hTitle}>Nuevo Cliente</Text>
+            <Text style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginRight:6 }}>desde POS</Text>
+          </View>
+          <ScrollView contentContainerStyle={{ padding:16, paddingBottom:40 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+
+            {/* OCR */}
+            <View style={s.ccCard}>
+              <Text style={[s.ccCardTitle, { color: colors.text }]}>🪪 Escanear DUI</Text>
+              <TouchableOpacity style={[s.ccActionBtn, { borderColor: colors.accent, opacity: ccScanningOcr?0.6:1 }]} onPress={ccEscanearDui} disabled={ccScanningOcr}>
+                <Text style={[s.ccActionBtnText, { color: colors.accent }]}>{ccScanningOcr ? '⏳ Escaneando...' : '📷 Escanear DUI (auto-rellenar)'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Datos personales */}
+            <View style={s.ccCard}>
+              <Text style={[s.ccCardTitle, { color: colors.text }]}>👤 Datos personales</Text>
+              <View style={{ flexDirection:'row', gap:8 }}>
+                <View style={{ flex:1 }}>
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: ccNombreError?'#dc2626':colors.border, backgroundColor: colors.surface }]}
+                    placeholder="Nombre *" placeholderTextColor={colors.textMuted} value={ccNombre}
+                    onChangeText={t => { setCcNombre(t); setCcNombreError(t.trim()?'':'Requerido'); }} />
+                  {ccNombreError ? <Text style={s.ccErr}>{ccNombreError}</Text> : null}
+                </View>
+                <View style={{ flex:1 }}>
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: ccApellidoError?'#dc2626':colors.border, backgroundColor: colors.surface }]}
+                    placeholder="Apellido *" placeholderTextColor={colors.textMuted} value={ccApellido}
+                    onChangeText={t => { setCcApellido(t); setCcApellidoError(t.trim()?'':'Requerido'); }} />
+                  {ccApellidoError ? <Text style={s.ccErr}>{ccApellidoError}</Text> : null}
+                </View>
+              </View>
+              <TextInput style={[s.ccInput, { color: colors.text, borderColor: ccDuiError?'#dc2626':colors.border, backgroundColor: colors.surface }]}
+                placeholder="DUI (12345678-9) *" placeholderTextColor={colors.textMuted} value={ccDui} onChangeText={ccHandleDuiChange} />
+              {ccDuiError ? <Text style={s.ccErr}>{ccDuiError}</Text> : null}
+            </View>
+
+            {/* Contacto */}
+            <View style={s.ccCard}>
+              <Text style={[s.ccCardTitle, { color: colors.text }]}>📞 Contacto</Text>
+              <TextInput style={[s.ccInput, { color: colors.text, borderColor: ccTelefonoError?'#dc2626':colors.border, backgroundColor: colors.surface }]}
+                placeholder="Teléfono (1234-5678) *" placeholderTextColor={colors.textMuted} value={ccTelefono} onChangeText={ccHandleTelChange} keyboardType="phone-pad" />
+              {ccTelefonoError ? <Text style={s.ccErr}>{ccTelefonoError}</Text> : null}
+              <TextInput style={[s.ccInput, { color: colors.text, borderColor: ccWhatsappError?'#dc2626':colors.border, backgroundColor: colors.surface }]}
+                placeholder="WhatsApp (1234-5678) *" placeholderTextColor={colors.textMuted} value={ccWhatsapp} onChangeText={ccHandleWaChange} keyboardType="phone-pad" />
+              {ccWhatsappError ? <Text style={s.ccErr}>{ccWhatsappError}</Text> : null}
+              <TextInput style={[s.ccInput, { color: colors.text, borderColor: ccEmailError?'#dc2626':colors.border, backgroundColor: colors.surface }]}
+                placeholder={ccEmailRequerido?'Email (requerido)':'Email (opcional)'} placeholderTextColor={colors.textMuted} value={ccEmail}
+                onChangeText={t => { setCcEmail(t); setCcEmailError(''); }} keyboardType="email-address" autoCapitalize="none" />
+              {ccEmailError ? <Text style={s.ccErr}>{ccEmailError}</Text> : null}
+            </View>
+
+            {/* Ubicación */}
+            <View style={s.ccCard}>
+              <Text style={[s.ccCardTitle, { color: colors.text }]}>📍 Ubicación</Text>
+              <TouchableOpacity style={[s.ccActionBtn, { borderColor: colors.border, opacity: ccLocationLoading?0.6:1 }]} onPress={ccGetLocation} disabled={ccLocationLoading}>
+                <Text style={[s.ccActionBtnText, { color: colors.text }]}>{ccLocationLoading ? '⏳ Obteniendo...' : '📍 Capturar ubicación actual'}</Text>
+              </TouchableOpacity>
+              {(ccLatitud && ccLongitud) ? <Text style={{ fontSize:11, color: colors.textMuted, textAlign:'center', marginTop:6 }}>{ccLatitud}, {ccLongitud}</Text> : null}
+              {(ccLatError||ccLongError) ? <Text style={s.ccErr}>{ccLatError||ccLongError}</Text> : null}
+            </View>
+
+            {/* Fotos DUI */}
+            <View style={s.ccCard}>
+              <Text style={[s.ccCardTitle, { color: colors.text }]}>🪪 Fotos del DUI <Text style={{ fontSize:11, fontWeight:'400', color: colors.textMuted }}>* Ambos lados</Text></Text>
+              <View style={{ flexDirection:'row', gap:10 }}>
+                <TouchableOpacity style={[s.ccPhotoCard, { borderColor: ccDuiFrente?colors.accent:ccFrenteError?'#dc2626':colors.border, backgroundColor: ccDuiFrente?(colors.accent+'12'):colors.surface }]} onPress={() => ccTomarFoto('dui_frente')}>
+                  <Text style={{ fontSize:26 }}>{ccDuiFrente ? '✓' : '📸'}</Text>
+                  <Text style={{ fontSize:11, color: colors.text, marginTop:4 }}>{ccDuiFrente ? 'Frente ✓' : 'Tomar frente'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.ccPhotoCard, { borderColor: ccDuiReverso?colors.accent:ccReversoError?'#dc2626':colors.border, backgroundColor: ccDuiReverso?(colors.accent+'12'):colors.surface }]} onPress={() => ccTomarFoto('dui_reverso')}>
+                  <Text style={{ fontSize:26 }}>{ccDuiReverso ? '✓' : '📸'}</Text>
+                  <Text style={{ fontSize:11, color: colors.text, marginTop:4 }}>{ccDuiReverso ? 'Reverso ✓' : 'Tomar reverso'}</Text>
+                </TouchableOpacity>
+              </View>
+              {(ccFrenteError||ccReversoError) ? <Text style={s.ccErr}>{ccFrenteError||ccReversoError}</Text> : null}
+            </View>
+
+            {/* Foto casa */}
+            <View style={s.ccCard}>
+              <Text style={[s.ccCardTitle, { color: colors.text }]}>🏠 Foto de la casa <Text style={{ fontSize:11, fontWeight:'400', color: colors.textMuted }}>(opcional)</Text></Text>
+              <TouchableOpacity style={[s.ccPhotoCard, { borderColor: ccFotoCasa?colors.accent:colors.border, backgroundColor: ccFotoCasa?(colors.accent+'12'):colors.surface, paddingVertical:18 }]} onPress={() => ccTomarFoto('casa')}>
+                <Text style={{ fontSize:26 }}>{ccFotoCasa ? '✓' : '📷'}</Text>
+                <Text style={{ fontSize:11, color: colors.text, marginTop:4 }}>{ccFotoCasa ? 'Foto tomada (toca para cambiar)' : 'Tomar foto de la casa'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Botón guardar */}
+            <TouchableOpacity
+              style={[{ borderRadius:12, paddingVertical:14, alignItems:'center', marginTop:8 }, ccLoading?{ backgroundColor: colors.accent, opacity:0.7 }:{ backgroundColor: colors.accent }]}
+              onPress={ccHandleSubmit} disabled={ccLoading}
+            >
+              {ccLoading ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color:'#fff', fontSize:15, fontWeight:'700' }}>✅ Guardar y seleccionar</Text>}
+            </TouchableOpacity>
+          </ScrollView>
+
+          {/* Preview imagen */}
+          <Modal visible={ccPreviewVisible} transparent onRequestClose={() => setCcPreviewVisible(false)}>
+            <TouchableOpacity style={{ flex:1, backgroundColor:'rgba(0,0,0,0.95)', justifyContent:'center', alignItems:'center', padding:16 }} activeOpacity={1} onPress={() => setCcPreviewVisible(false)}>
+              <Image source={{ uri: ccPreviewImage }} style={{ width:'100%', height:400, resizeMode:'contain' }} />
+              <TouchableOpacity onPress={() => setCcPreviewVisible(false)} style={{ marginTop:20, backgroundColor: colors.accent, paddingHorizontal:24, paddingVertical:12, borderRadius:10 }}>
+                <Text style={{ color:'#fff', fontWeight:'700' }}>✕ Cerrar</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </Modal>
         </View>
       </Modal>
     </View>
@@ -1489,6 +1885,31 @@ const styles = (c) => StyleSheet.create({
     borderWidth: 1,
     borderColor: c.border,
   },
+  // Crear cliente integrado
+  crearClienteBtn: { margin:12, marginTop:4, borderRadius:10, paddingVertical:11, alignItems:'center' },
+  crearClienteBtnText: { color:'#fff', fontWeight:'700', fontSize:13 },
+  ccCard: { backgroundColor:c.surface, borderRadius:12, padding:14, marginBottom:12, borderWidth:1, borderColor:c.border },
+  ccCardTitle: { fontSize:13, fontWeight:'700', marginBottom:10 },
+  ccInput: { borderWidth:1, borderRadius:9, paddingHorizontal:11, paddingVertical:9, marginBottom:6, fontSize:13 },
+  ccErr: { color:'#dc2626', fontSize:11, marginBottom:6, marginTop:-2 },
+  ccActionBtn: { borderWidth:1, borderRadius:9, paddingVertical:10, alignItems:'center', marginBottom:4 },
+  ccActionBtnText: { fontSize:13, fontWeight:'600' },
+  ccPhotoCard: { flex:1, borderWidth:1.5, borderStyle:'dashed', borderRadius:10, paddingVertical:14, alignItems:'center', justifyContent:'center' },
+
+  // Configuraciones
+  cfgOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  cfgBox: { width: '100%', borderRadius: 14, padding: 20 },
+  cfgTitle: { fontSize: 17, fontWeight: '700', marginBottom: 4 },
+  cfgSubtitle: { fontSize: 13, marginBottom: 14 },
+  cfgInput: { borderWidth: 1, borderRadius: 8, padding: 10, fontSize: 15, marginBottom: 6 },
+  cfgError: { color: '#e53e3e', fontSize: 12, marginBottom: 8 },
+  cfgBtnRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  cfgBtn: { flex: 1, borderRadius: 8, paddingVertical: 10, alignItems: 'center' },
+  cfgBtnText: { fontWeight: '600', fontSize: 14 },
+  cfgRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderTopWidth: 1, borderTopColor: c.border, gap: 12 },
+  cfgRowLabel: { fontSize: 14, fontWeight: '600', marginBottom: 2 },
+  cfgRowSub: { fontSize: 12 },
+
   confirmBtnConfirm: {
     shadowColor: c.accent,
     shadowOffset: { width: 0, height: 3 },

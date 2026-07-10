@@ -33,16 +33,30 @@ const parseDUI = (texto) => {
 
   const textoUp = texto.toUpperCase();
 
-  // Buscar después de la etiqueta APELLIDOS
-  const matchApellido = textoUp.match(/APELLIDOS?\s*[:\n\r]+\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]{2,40})/);
-  if (matchApellido) {
-    apellido = capitalizar(matchApellido[1].trim());
-  }
+  // El DUI tiene etiquetas bilingüe: "Apellidos / Surname" y "Nombre / Given Names"
+  // Buscamos la línea que CONTIENE la palabra clave y tomamos la siguiente línea con solo letras
+  const esLineaNombre = (l) => /^[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ ]{2,}$/.test(l);
 
-  // Buscar después de la etiqueta NOMBRES
-  const matchNombre = textoUp.match(/NOMBRES?\s*[:\n\r]+\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]{2,40})/);
-  if (matchNombre) {
-    nombre = capitalizar(matchNombre[1].trim());
+  for (let i = 0; i < lineas.length - 1; i++) {
+    const up = lineas[i].toUpperCase();
+    if (!apellido && up.includes('APELLIDO')) {
+      // La línea puede ser "Apellidos / Surname" y el valor está en la siguiente
+      // O el valor puede estar en la misma línea después de la barra
+      const enMismaLinea = lineas[i].replace(/apellidos?.*?surname/i, '').trim();
+      if (enMismaLinea && esLineaNombre(enMismaLinea.toUpperCase())) {
+        apellido = capitalizar(enMismaLinea);
+      } else if (esLineaNombre(lineas[i + 1]?.toUpperCase() || '')) {
+        apellido = capitalizar(lineas[i + 1]);
+      }
+    }
+    if (!nombre && (up.includes('NOMBRE') || up.includes('GIVEN'))) {
+      const enMismaLinea = lineas[i].replace(/nombres?.*?names?/i, '').trim();
+      if (enMismaLinea && esLineaNombre(enMismaLinea.toUpperCase())) {
+        nombre = capitalizar(enMismaLinea);
+      } else if (esLineaNombre(lineas[i + 1]?.toUpperCase() || '')) {
+        nombre = capitalizar(lineas[i + 1]);
+      }
+    }
   }
 
   // Si no encontró con etiquetas, intentar con líneas limpias de palabras clave

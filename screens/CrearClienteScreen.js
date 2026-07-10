@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   StatusBar, Alert, ActivityIndicator, Platform, Image,
   ScrollView, Modal
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
 import api from '../services/api';
@@ -30,6 +31,15 @@ export default function CrearClienteScreen({ navigation }) {
   const [previewVisible, setPreviewVisible] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
   const [scanningOcr, setScanningOcr] = useState(false);
+  const [email, setEmail] = useState('');
+  const [emailError, setEmailError] = useState('');
+  const [emailRequerido, setEmailRequerido] = useState(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem('POS_CONFIG').then(raw => {
+      if (raw) { try { setEmailRequerido(!!JSON.parse(raw).emailRequerido); } catch {} }
+    });
+  }, []);
 
   // Estados de error
   const [nombreError, setNombreError] = useState('');
@@ -122,19 +132,21 @@ export default function CrearClienteScreen({ navigation }) {
         Alert.alert('Permiso requerido', 'Necesitamos acceso a la cámara.');
         return;
       }
-      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.9 });
+      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 1.0 });
       if (!result.canceled && result.assets?.[0]) {
         setScanningOcr(true);
         try {
           const datos = await extractTextFromImage(result.assets[0].uri);
           if (datos) {
             const campos = [];
-            if (datos.dui && !dui)       { handleDuiChange(datos.dui);         campos.push(`DUI: ${datos.dui}`); }
-            if (datos.nombre && !nombre) { handleNombreChange(datos.nombre);   campos.push(`Nombre: ${datos.nombre}`); }
-            if (datos.apellido && !apellido) { handleApellidoChange(datos.apellido); campos.push(`Apellido: ${datos.apellido}`); }
+            if (datos.dui && !dui)           { handleDuiChange(datos.dui);           campos.push(`✅ DUI: ${datos.dui}`); }
+            if (datos.nombre && !nombre)     { handleNombreChange(datos.nombre);     campos.push(`✅ Nombre: ${datos.nombre}`); }
+            if (datos.apellido && !apellido) { handleApellidoChange(datos.apellido); campos.push(`✅ Apellido: ${datos.apellido}`); }
+            if (!datos.nombre && !nombre)     campos.push('✏️ Nombre: escríbelo manualmente');
+            if (!datos.apellido && !apellido) campos.push('✏️ Apellido: escríbelo manualmente');
             Alert.alert(
-              campos.length > 0 ? '✅ Datos detectados' : '⚠️ Sin datos',
-              campos.length > 0 ? campos.join('\n') : 'Asegúrate de enfocar bien el frente del DUI.'
+              campos.length > 0 ? '📋 Resultado del escaneo' : '⚠️ Sin datos',
+              campos.length > 0 ? campos.join('\n') : 'No se pudo leer el DUI. Intenta con mejor iluminación.'
             );
           }
         } catch (e) { console.warn('OCR error:', e.message); }
@@ -221,7 +233,8 @@ export default function CrearClienteScreen({ navigation }) {
       formData.append('telefono_whatsapp', telefonoWhatsapp.trim());
       formData.append('latitud', latitud.trim());
       formData.append('longitud', longitud.trim());
-      
+      if (email.trim()) formData.append('email', email.trim());
+
       if (duiFrente)  appendImageToFormData(formData, 'dui_foto_frente', duiFrente);
       if (duiReverso) appendImageToFormData(formData, 'dui_foto_reverso', duiReverso);
       if (fotoCasa)   appendImageToFormData(formData, 'foto_casa', fotoCasa);
@@ -318,6 +331,13 @@ export default function CrearClienteScreen({ navigation }) {
     }
     if (!duiFrente)  { setFrenteError('Toma la foto del frente del DUI');   valid = false; }
     if (!duiReverso) { setReversoError('Toma la foto del reverso del DUI'); valid = false; }
+    if (emailRequerido && !email.trim()) {
+      setEmailError('El email es requerido');
+      valid = false;
+    } else if (email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setEmailError('Formato de email inválido');
+      valid = false;
+    }
 
     return valid;
   };
@@ -453,6 +473,17 @@ export default function CrearClienteScreen({ navigation }) {
           keyboardType="phone-pad"
         />
         {whatsappError ? <Text style={s.errorText}>{whatsappError}</Text> : null}
+
+        <TextInput
+          style={[s.input, { marginTop: 8 }, emailError && s.inputError]}
+          placeholder={emailRequerido ? 'Email (requerido)' : 'Email (opcional)'}
+          placeholderTextColor={colors.textMuted}
+          value={email}
+          onChangeText={t => { setEmail(t); setEmailError(''); }}
+          keyboardType="email-address"
+          autoCapitalize="none"
+        />
+        {emailError ? <Text style={s.errorText}>{emailError}</Text> : null}
       </View>
 
       {/* Ubicación */}
