@@ -1,46 +1,36 @@
 /**
  * POS Heartbeat Service
- * Sends device state to POST /api/pos/heartbeat every 2 minutes while the user
- * is logged in. No UI — pure background data reporting.
  *
- * Datos enviados:
- *   device_serial  — Android ID único por dispositivo (cacheado en AsyncStorage)
- *   device_nombre  — "POS-XXXX" donde XXXX son los últimos 4 chars del serial
- *   lat / lng      — GPS si el permiso fue concedido previamente, null si no
- *   bateria        — % de batería (null si no disponible sin paquete nativo extra)
- *   app_version    — versión de app.json
- *   error          — último error reportado por la app, null si todo bien
+ * Envía la posición del vendedor al servidor cada 2 minutos, incluso con el
+ * teléfono bloqueado o la app en segundo plano.
+ *
+ * Estrategia dual:
+ *  1. Foreground: setInterval normal mientras la app está activa.
+ *  2. Background: expo-task-manager + Location.startLocationUpdatesAsync
+ *     — Android dispara la tarea cuando el SO detecta movimiento significativo,
+ *       lo que mantiene la posición fresca sin agotar la batería.
+ *
+ * Datos enviados a POST /api/pos/heartbeat:
+ *   device_serial, device_nombre, lat, lng, bateria, app_version, error
  */
-import { Platform } from 'react-native';
+import { Platform, AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
+import * as TaskManager from 'expo-task-manager';
 import * as Battery from 'expo-battery';
 import api from './api';
 
-const APP_VERSION = '1.0.0'; // debe coincidir con app.json version
+const TASK_NAME   = 'SIDB_LOCATION_TASK';
+const INTERVAL_MS = 2 * 60 * 1000; // 2 min foreground
 const SERIAL_KEY  = '@sidb/device_serial';
+const APP_VERSION = '1.0.1';
 
-// ── Device serial ─────────────────────────────────────────────────────────────
-// Android ID (único por dispositivo, persiste entre instalaciones en el mismo apk)
-// Accedemos vía el módulo nativo RNDeviceInfo si existe, o generamos un UUID
-// estable guardado en AsyncStorage.
+// ── Serial de dispositivo ─────────────────────────────────────────────────────
 const getOrCreateSerial = async () => {
-  // 1. Intentar leer el Android ID por NativeModules si está disponible
-  try {
-    const { RNDeviceInfo } = NativeModules;
-    if (RNDeviceInfo?.getAndroidIdSync) {
-      const id = RNDeviceInfo.getAndroidIdSync();
-      if (id && id !== 'unknown') return id;
-    }
-  } catch { /* no disponible */ }
-
-  // 2. Fallback: UUID estable guardado en AsyncStorage
   try {
     const cached = await AsyncStorage.getItem(SERIAL_KEY);
     if (cached) return cached;
-
-    // Generar UUID simple basado en timestamp + random
-    const uuid = `RN-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+    const uuid = `RN-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2,7).toUpperCase()}`;
     await AsyncStorage.setItem(SERIAL_KEY, uuid);
     return uuid;
   } catch {
@@ -48,18 +38,13 @@ const getOrCreateSerial = async () => {
   }
 };
 
-// ── GPS (no bloqueante, usa última posición conocida) ─────────────────────────
-const getGps = async () => {
-  try {
-    const { status } = await Location.getForegroundPermissionsAsync();
-    if (status !== 'granted') return { lat: null, lng: null };
-    const pos = await Location.getLastKnownPositionAsync();
-    if (pos) return { lat: pos.coords.latitude, lng: pos.coords.longitude };
-  } catch { /* ignore */ }
-  return { lat: null, lng: null };
+let _serial = null;
+const getSerial = async () => {
+  if (!_serial) _serial = await getOrCreateSerial();
+  return _serial;
 };
 
-// ── Batería via expo-battery (0.0–1.0 → 0–100) ────────────────────────────────
+// ── Batería ───────────────────────────────────────────────────────────────────
 const getBateria = async () => {
   try {
     const level = await Battery.getBatteryLevelAsync();
@@ -68,50 +53,115 @@ const getBateria = async () => {
   return null;
 };
 
-// ── Último error reportado ────────────────────────────────────────────────────
+// ── Último error ──────────────────────────────────────────────────────────────
 let _lastError = null;
-export const setError  = (msg) => { _lastError = msg  || null; };
+export const setError   = (msg) => { _lastError = msg || null; };
 export const clearError = ()    => { _lastError = null; };
 
-// ── Serial cacheado en memoria tras primera lectura ───────────────────────────
-let _serial = null;
-
-// ── Envío de heartbeat ────────────────────────────────────────────────────────
-const sendHeartbeat = async () => {
+// ── Envío principal ───────────────────────────────────────────────────────────
+export const sendHeartbeat = async (coords = null) => {
   try {
-    if (!_serial) _serial = await getOrCreateSerial();
+    const serial  = await getSerial();
+    const bateria = await getBateria();
 
-    const [bateria, gps] = await Promise.all([getBateria(), getGps()]);
+    let lat = null, lng = null;
+    if (coords) {
+      lat = coords.latitude;
+      lng = coords.longitude;
+    } else {
+      try {
+        const pos = await Location.getLastKnownPositionAsync();
+        if (pos) { lat = pos.coords.latitude; lng = pos.coords.longitude; }
+      } catch { /* ignore */ }
+    }
 
-    const payload = {
-      device_serial: _serial,
-      device_nombre: `POS-${_serial.slice(-4).toUpperCase()}`,
-      lat:           gps.lat,
-      lng:           gps.lng,
-      app_version:   APP_VERSION,
-      error:         _lastError,
-      ...(bateria !== null && { bateria }),
-    };
-
-    await api.post('/pos/heartbeat', payload);
+    await api.post('/pos/heartbeat', {
+      device_serial: serial,
+      device_nombre: `POS-${serial.slice(-4).toUpperCase()}`,
+      lat,
+      lng,
+      bateria,
+      app_version: APP_VERSION,
+      error: _lastError,
+    });
   } catch {
-    // Falla silenciosa — si no hay red simplemente no se envía
+    // Falla silenciosa — sin red simplemente no se envía
   }
 };
 
-// ── Control del intervalo ─────────────────────────────────────────────────────
-const INTERVAL_MS = 2 * 60 * 1000; // 2 minutos
+// ── Tarea de background (se registra en el módulo, fuera de componentes) ──────
+// TaskManager.defineTask debe llamarse en el top-level del módulo, no dentro
+// de funciones, para que el SO pueda invocarla cuando la app está suspendida.
+TaskManager.defineTask(TASK_NAME, async ({ data, error }) => {
+  if (error) { console.warn('[HB background]', error.message); return; }
+  const coords = data?.locations?.[0]?.coords || null;
+  await sendHeartbeat(coords);
+});
+
+// ── Solicitar permisos de ubicación en background ─────────────────────────────
+const pedirPermisosBackground = async () => {
+  // Primero aseguramos permisos en primer plano
+  const { status: fg } = await Location.requestForegroundPermissionsAsync();
+  if (fg !== 'granted') return false;
+
+  // Luego solicitamos background (Android muestra el diálogo del sistema)
+  const { status: bg } = await Location.requestBackgroundPermissionsAsync();
+  return bg === 'granted';
+};
+
+// ── Iniciar seguimiento en background ─────────────────────────────────────────
+const iniciarBackground = async () => {
+  try {
+    const granted = await pedirPermisosBackground();
+    if (!granted) {
+      console.warn('[HB] Permiso de background location denegado — solo foreground activo');
+      return;
+    }
+
+    const yaActivo = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
+    if (yaActivo) return;
+
+    await Location.startLocationUpdatesAsync(TASK_NAME, {
+      accuracy: Location.Accuracy.Balanced,
+      timeInterval: INTERVAL_MS,
+      distanceInterval: 50,          // también dispara si se mueve 50 m
+      showsBackgroundLocationIndicator: false,
+      foregroundService: {
+        notificationTitle: 'SIDB activo',
+        notificationBody: 'Registrando ubicación del cobrador',
+        notificationColor: '#1a1a2e',
+      },
+      pausesUpdatesAutomatically: false,
+    });
+  } catch (e) {
+    console.warn('[HB] Error al iniciar background location:', e.message);
+  }
+};
+
+const detenerBackground = async () => {
+  try {
+    const activo = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
+    if (activo) await Location.stopLocationUpdatesAsync(TASK_NAME);
+  } catch { /* ignore */ }
+};
+
+// ── Control del intervalo foreground ─────────────────────────────────────────
 let _timer = null;
 
-export const startHeartbeat = () => {
-  if (_timer) return;           // ya está corriendo
-  sendHeartbeat();              // envío inmediato al hacer login
-  _timer = setInterval(sendHeartbeat, INTERVAL_MS);
+export const startHeartbeat = async () => {
+  // Envío inmediato
+  sendHeartbeat();
+
+  // Foreground: intervalo normal
+  if (!_timer) {
+    _timer = setInterval(sendHeartbeat, INTERVAL_MS);
+  }
+
+  // Background: task de ubicación
+  await iniciarBackground();
 };
 
-export const stopHeartbeat = () => {
-  if (_timer) {
-    clearInterval(_timer);
-    _timer = null;
-  }
+export const stopHeartbeat = async () => {
+  if (_timer) { clearInterval(_timer); _timer = null; }
+  await detenerBackground();
 };

@@ -20,7 +20,14 @@
         "foregroundImage": "./assets/img/logo.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.sidb.distribuidora"
+      "package": "com.sidb.distribuidora",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ]
     },
     "web": {
       "favicon": "./assets/img/logo.png"
@@ -32,9 +39,13 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Esta app necesita la ubicación para registrar visitas de cobro."
+          "locationAlwaysAndWhenInUsePermission": "Esta app necesita tu ubicación siempre para registrar la posición del cobrador en tiempo real.",
+          "locationWhenInUsePermission": "Esta app necesita la ubicación para registrar visitas de cobro.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true
         }
       ],
+      "expo-task-manager",
       [
         "expo-image-picker",
         {
