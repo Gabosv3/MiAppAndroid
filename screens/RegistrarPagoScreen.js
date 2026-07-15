@@ -84,7 +84,7 @@ const METODOS = [
 ];
 
 export default function RegistrarPagoScreen({ navigation, route }) {
-  const { cliente, ventaId, ventaNumero, saldoPendiente, cuotasVencidas } = route.params;
+  const { cliente, ventaId, ventaNumero, producto, saldoPendiente, cuotasVencidas } = route.params;
   const { user } = useAuth();
   const nombreCobrador = user?.name || user?.full_name || user?.nombre || user?.usuario || 'Cobrador';
 
@@ -154,6 +154,7 @@ export default function RegistrarPagoScreen({ navigation, route }) {
           montoTotal: montoNum,
           metodoPago: metodo,
           ventaNumero,
+          producto,
           numeroRecibo,
           proximaVisita: proxVisita,
           saldoAntes,
@@ -198,6 +199,7 @@ export default function RegistrarPagoScreen({ navigation, route }) {
         montoTotal: montoNum,
         metodoPago: metodo,
         ventaNumero,
+        producto,
         numeroRecibo,
         proximaVisita: histItem.proximaVisita,
         saldoAntes,
