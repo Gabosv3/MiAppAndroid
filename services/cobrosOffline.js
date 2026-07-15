@@ -145,13 +145,20 @@ export const leerHistorial = async () => {
 
 // Actualiza el primer registro offline pendiente que coincida con el pago sincronizado.
 // Evita duplicados en el historial al sincronizar pagos guardados sin conexión.
+// También reemplaza el numeroRecibo TEMPORAL (generado local al momento del cobro
+// offline) por el correlativo real que asigna el servidor, ligado al cobrador.
 const actualizarHistorialOffline = async (pagoId, respuestaServidor) => {
   const raw = await AsyncStorage.getItem(KEYS.historial);
   const historial = raw ? JSON.parse(raw) : [];
   // Busca el registro offline que corresponde a este pago por su id de cola
   const idx = historial.findIndex(h => h.pagoOfflineId === pagoId);
   if (idx !== -1) {
-    historial[idx] = { ...historial[idx], resultado: respuestaServidor, sincronizado: true };
+    historial[idx] = {
+      ...historial[idx],
+      resultado: respuestaServidor,
+      sincronizado: true,
+      ...(respuestaServidor?.numero_recibo && { numeroRecibo: respuestaServidor.numero_recibo }),
+    };
     await AsyncStorage.setItem(KEYS.historial, JSON.stringify(historial));
   }
   // Si no encuentra el registro (ej: historial borrado), no hace nada — no duplica

@@ -116,14 +116,13 @@ export default function RegistrarPagoScreen({ navigation, route }) {
   const ejecutarRegistro = async () => {
     setSubmitting(true);
 
-    // Correlativo propio del recibo, generado en el teléfono al momento del cobro —
-    // funciona con o sin conexión porque no depende de respuesta del servidor.
-    // Incluye el ID del cobrador para que los recibos sean distinguibles entre
-    // cobradores distintos aunque cada uno lleve su propio contador local.
-    const numeroRecibo = await generarNumeroRecibo(user?.id);
-
     if (!isOnline) {
       try {
+        // Sin conexión, el servidor no puede asignar el correlativo real —
+        // se genera uno TEMPORAL local solo para poder imprimir en el momento.
+        // Al sincronizar, el número real que asigna el servidor (ligado al
+        // cobrador, no al teléfono) reemplaza a este en el historial.
+        const numeroRecibo = await generarNumeroRecibo(user?.id);
         const saldoAntes = saldoNum;
         const saldoDespues = Math.max(0, saldoAntes - montoNum);
         const proxVisita = calcProximaVisita();
@@ -175,6 +174,10 @@ export default function RegistrarPagoScreen({ navigation, route }) {
         ...(referencia.trim() && { referencia: referencia.trim() }),
         ...(notas.trim()      && { observaciones: notas.trim() }),
       });
+      // El servidor asigna el correlativo real, ligado al cobrador (no al
+      // teléfono) — si por algún motivo no lo devuelve, se genera uno local
+      // como respaldo para no dejar el recibo sin número.
+      const numeroRecibo = data.numero_recibo || await generarNumeroRecibo(user?.id);
       const proxVisita = calcProximaVisita();
       const histItem = await guardarEnHistorial({
         clienteId: cliente.id, clienteNombre: cliente.nombre,
@@ -209,6 +212,7 @@ export default function RegistrarPagoScreen({ navigation, route }) {
           [
             { text: 'Cancelar', style: 'cancel' },
             { text: 'Guardar offline', onPress: async () => {
+              const numeroRecibo = await generarNumeroRecibo(user?.id);
               const proxVisita = calcProximaVisita();
               const pagoEncolado = await encolarPago({
                 clienteId: cliente.id, clienteNombre: cliente.nombre,
