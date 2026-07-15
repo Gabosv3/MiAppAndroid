@@ -2,12 +2,25 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fechaHoyLocal, fechaLocalDesde } from './dateUtils';
 
 const KEYS = {
-  ruta:      'COBROS_RUTA_CACHE',
-  clientes:  'COBROS_CLIENTES_CACHE',
-  pagos:     'COBROS_PAGOS_PENDIENTES',
-  historial: 'COBROS_HISTORIAL',
-  orden:     'COBROS_ORDEN_CLIENTES',
-  visitados: 'COBROS_VISITADOS_HOY',
+  ruta:        'COBROS_RUTA_CACHE',
+  clientes:    'COBROS_CLIENTES_CACHE',
+  pagos:       'COBROS_PAGOS_PENDIENTES',
+  historial:   'COBROS_HISTORIAL',
+  orden:       'COBROS_ORDEN_CLIENTES',
+  visitados:   'COBROS_VISITADOS_HOY',
+  correlativo: 'COBROS_CORRELATIVO_LOCAL',
+};
+
+// ─── CORRELATIVO DE RECIBO (por dispositivo) ─────────────────────────────────
+// Cada cobro registrado (con o sin conexión) recibe un número de recibo propio,
+// generado en el momento en el teléfono. Es independiente del número de venta:
+// un cliente puede tener 1 venta y 5 recibos de abonos distintos a lo largo del
+// tiempo. Al no depender del servidor, funciona igual con o sin conexión.
+export const generarNumeroRecibo = async () => {
+  const raw = await AsyncStorage.getItem(KEYS.correlativo);
+  const siguiente = (raw ? parseInt(raw, 10) : 0) + 1;
+  await AsyncStorage.setItem(KEYS.correlativo, String(siguiente));
+  return `REC-${String(siguiente).padStart(6, '0')}`;
 };
 
 const fechaHoy = fechaHoyLocal; // hora de El Salvador, no UTC
@@ -49,12 +62,12 @@ export const leerClienteCache = async (clienteId) => {
 
 // ─── PAGOS PENDIENTES ────────────────────────────────────────────────────────
 
-export const encolarPago = async ({ clienteId, clienteNombre, ventaId, ventaNumero, monto, metodo, referencia, notas }) => {
+export const encolarPago = async ({ clienteId, clienteNombre, ventaId, ventaNumero, numeroRecibo, monto, metodo, referencia, notas }) => {
   const raw = await AsyncStorage.getItem(KEYS.pagos);
   const cola = raw ? JSON.parse(raw) : [];
   const item = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
-    clienteId, clienteNombre, ventaId, ventaNumero,
+    clienteId, clienteNombre, ventaId, ventaNumero, numeroRecibo,
     monto, metodo, referencia, notas,
     creadoEn: new Date().toISOString(),
   };
@@ -89,7 +102,7 @@ const proximaVisita = (diasBase = 14) => {
 };
 
 export const guardarEnHistorial = async ({
-  clienteId, clienteNombre, clienteWhatsapp = null, ventaNumero, monto, metodo, resultado,
+  clienteId, clienteNombre, clienteWhatsapp = null, ventaNumero, numeroRecibo, monto, metodo, resultado,
   tipo = 'pago', resultadoVisita = null, observaciones = null,
   proximaVisitaFecha = null, pagoOfflineId = null,
 }) => {
@@ -102,6 +115,7 @@ export const guardarEnHistorial = async ({
     clienteNombre,
     clienteWhatsapp,
     ventaNumero,
+    numeroRecibo,
     monto,
     metodo,
     resultadoVisita,

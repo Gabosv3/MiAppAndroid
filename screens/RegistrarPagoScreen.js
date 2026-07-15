@@ -7,7 +7,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Print from 'expo-print';
 import api from '../services/api';
 import { useConnectivity } from '../services/connectivity';
-import { encolarPago, guardarEnHistorial, marcarClienteVisitado } from '../services/cobrosOffline';
+import { encolarPago, guardarEnHistorial, marcarClienteVisitado, generarNumeroRecibo } from '../services/cobrosOffline';
 import { useAuth } from '../context/AuthContext';
 
 const fmt = (n) => `$${Number(n||0).toFixed(2)}`;
@@ -116,6 +116,10 @@ export default function RegistrarPagoScreen({ navigation, route }) {
   const ejecutarRegistro = async () => {
     setSubmitting(true);
 
+    // Correlativo propio del recibo, generado en el teléfono al momento del cobro —
+    // funciona con o sin conexión porque no depende de respuesta del servidor.
+    const numeroRecibo = await generarNumeroRecibo();
+
     if (!isOnline) {
       try {
         const saldoAntes = saldoNum;
@@ -123,14 +127,14 @@ export default function RegistrarPagoScreen({ navigation, route }) {
         const proxVisita = calcProximaVisita();
         const pagoEncolado = await encolarPago({
           clienteId: cliente.id, clienteNombre: cliente.nombre,
-          ventaId, ventaNumero,
+          ventaId, ventaNumero, numeroRecibo,
           monto: montoNum, metodo,
           referencia: referencia.trim(), notas: notas.trim(),
         });
         await guardarEnHistorial({
           clienteId: cliente.id, clienteNombre: cliente.nombre,
           clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
-          ventaNumero, monto: montoNum, metodo,
+          ventaNumero, numeroRecibo, monto: montoNum, metodo,
           proximaVisitaFecha: proxVisita,
           pagoOfflineId: pagoEncolado.id,
           resultado: {
@@ -149,6 +153,7 @@ export default function RegistrarPagoScreen({ navigation, route }) {
           montoTotal: montoNum,
           metodoPago: metodo,
           ventaNumero,
+          numeroRecibo,
           proximaVisita: proxVisita,
           saldoAntes,
           saldoDespues,
@@ -172,7 +177,7 @@ export default function RegistrarPagoScreen({ navigation, route }) {
       const histItem = await guardarEnHistorial({
         clienteId: cliente.id, clienteNombre: cliente.nombre,
         clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
-        ventaNumero, monto: montoNum, metodo, resultado: data,
+        ventaNumero, numeroRecibo, monto: montoNum, metodo, resultado: data,
         proximaVisitaFecha: proxVisita,
       });
       await marcarClienteVisitado(cliente.id);
@@ -188,6 +193,7 @@ export default function RegistrarPagoScreen({ navigation, route }) {
         montoTotal: montoNum,
         metodoPago: metodo,
         ventaNumero,
+        numeroRecibo,
         proximaVisita: histItem.proximaVisita,
         saldoAntes,
         saldoDespues,
@@ -204,14 +210,14 @@ export default function RegistrarPagoScreen({ navigation, route }) {
               const proxVisita = calcProximaVisita();
               const pagoEncolado = await encolarPago({
                 clienteId: cliente.id, clienteNombre: cliente.nombre,
-                ventaId, ventaNumero,
+                ventaId, ventaNumero, numeroRecibo,
                 monto: montoNum, metodo,
                 referencia: referencia.trim(), notas: notas.trim(),
               });
               await guardarEnHistorial({
                 clienteId: cliente.id, clienteNombre: cliente.nombre,
                 clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
-                ventaNumero, monto: montoNum, metodo,
+                ventaNumero, numeroRecibo, monto: montoNum, metodo,
                 proximaVisitaFecha: proxVisita,
                 pagoOfflineId: pagoEncolado.id,
                 resultado: { ok: true, mensaje: 'Cobro pendiente de envío (offline)', proxima_cuota: null },
