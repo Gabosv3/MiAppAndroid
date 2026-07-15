@@ -33,6 +33,126 @@ export default function DetalleClienteScreen({ navigation, route }) {
   const [savingNombre,  setSavingNombre]  = useState(false);
   const { isOnline } = useConnectivity();
 
+  // ── Grupo familiar (cuentas vinculadas) ───────────────────────────────────
+  const [grupo,           setGrupo]           = useState(null); // { grupo_id, clientes, saldo_total_grupo }
+  const [loadingGrupo,    setLoadingGrupo]    = useState(false);
+  const [modalVincular,   setModalVincular]   = useState(false);
+  const [buscarVincular,  setBuscarVincular]  = useState('');
+  const [resultadosVinc,  setResultadosVinc]  = useState([]);
+  const [buscandoVinc,    setBuscandoVinc]    = useState(false);
+  const [vinculando,      setVinculando]      = useState(false);
+  const [modalAbonoGrupo, setModalAbonoGrupo] = useState(false);
+  const [montoAbonoGrupo, setMontoAbonoGrupo] = useState('');
+  const [procesandoAbono, setProcesandoAbono] = useState(false);
+
+  const cargarGrupo = useCallback(async () => {
+    if (!isOnline) return;
+    setLoadingGrupo(true);
+    try {
+      const { data } = await api.get(`/clientes/${clienteId}/grupo`);
+      setGrupo(data);
+    } catch { /* silencioso, sección opcional */ }
+    finally { setLoadingGrupo(false); }
+  }, [clienteId, isOnline]);
+
+  useFocusEffect(useCallback(() => { cargarGrupo(); }, [cargarGrupo]));
+
+  const buscarClienteParaVincular = useCallback(async (texto) => {
+    if (!texto.trim()) { setResultadosVinc([]); return; }
+    setBuscandoVinc(true);
+    try {
+      const { data } = await api.get('/cobros/clientes/buscar', { params: { codigo: texto.trim() } });
+      const lista = Array.isArray(data) ? data : (data.clientes || []);
+      setResultadosVinc(lista.filter(c => c.id !== clienteId));
+    } catch { setResultadosVinc([]); }
+    finally { setBuscandoVinc(false); }
+  }, [clienteId]);
+
+  const vincularCliente = async (otroId) => {
+    setVinculando(true);
+    try {
+      await api.post(`/clientes/${clienteId}/vincular`, { cliente_id_vincular: otroId });
+      setModalVincular(false);
+      setBuscarVincular('');
+      setResultadosVinc([]);
+      await cargarGrupo();
+      Alert.alert('✅ Vinculado', 'Las cuentas fueron vinculadas correctamente.');
+    } catch (e) {
+      Alert.alert('Error', e?.response?.data?.message || 'No se pudo vincular.');
+    } finally {
+      setVinculando(false);
+    }
+  };
+
+  const desvincularCliente = (otroId, otroNombre) => {
+    Alert.alert(
+      'Desvincular cuenta',
+      `¿Quitar a ${otroNombre} de este grupo familiar?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Desvincular', style: 'destructive', onPress: async () => {
+          try {
+            await api.post(`/clientes/${otroId}/desvincular`);
+            await cargarGrupo();
+          } catch (e) {
+            Alert.alert('Error', e?.response?.data?.message || 'No se pudo desvincular.');
+          }
+        }},
+      ]
+    );
+  };
+
+  // Reparte el monto ingresado entre las cuentas del grupo (más antigua primero)
+  // y llama al mismo endpoint de pago que usa RegistrarPagoScreen, una vez por cuenta.
+  const abonarATodasLasCuentas = async () => {
+    const monto = parseFloat(montoAbonoGrupo);
+    if (!monto || monto <= 0) {
+      Alert.alert('Monto inválido', 'Ingresa un monto mayor a 0.');
+      return;
+    }
+    if (!grupo?.clientes?.length) return;
+
+    // Aplanar todas las cuentas de todos los clientes del grupo, ordenadas por venta_id (más antigua primero)
+    const cuentas = grupo.clientes
+      .flatMap(c => (c.cuentas || []).map(cta => ({ ...cta, cliente_id: c.id, clienteNombre: `${c.nombre} ${c.apellido || ''}`.trim() })))
+      .sort((a, b) => a.venta_id - b.venta_id);
+
+    if (cuentas.length === 0) {
+      Alert.alert('Sin cuentas', 'No hay cuentas con saldo pendiente en este grupo.');
+      return;
+    }
+
+    setProcesandoAbono(true);
+    let restante = monto;
+    const resultados = [];
+
+    for (const cta of cuentas) {
+      if (restante <= 0) break;
+      const aPagar = Math.min(restante, cta.saldo);
+      if (aPagar <= 0) continue;
+      try {
+        await api.post(`/cobros/clientes/${cta.cliente_id}/pagar`, {
+          monto: aPagar,
+          metodo_pago: 'efectivo',
+          venta_id: cta.venta_id,
+        });
+        resultados.push(`✅ ${cta.clienteNombre} (${cta.producto}): ${fmt(aPagar)}`);
+        restante -= aPagar;
+      } catch (e) {
+        resultados.push(`❌ ${cta.clienteNombre} (${cta.producto}): error al aplicar`);
+      }
+    }
+
+    setProcesandoAbono(false);
+    setModalAbonoGrupo(false);
+    setMontoAbonoGrupo('');
+    await cargarGrupo();
+    await cargar();
+
+    const sobrante = restante > 0 ? `\n\nSobrante sin aplicar: ${fmt(restante)}` : '';
+    Alert.alert('Abono grupal procesado', resultados.join('\n') + sobrante);
+  };
+
   const cargar = useCallback(async () => {
     try {
       setError('');
@@ -279,6 +399,46 @@ export default function DetalleClienteScreen({ navigation, route }) {
             </View>
           </View>
 
+          {/* ── Grupo familiar (cuentas vinculadas) ── */}
+          <View style={s.grupoHeaderRow}>
+            <Text style={[s.sectionTitle, { marginTop: 0, marginBottom: 0 }]}>Cuentas vinculadas</Text>
+            <TouchableOpacity onPress={() => { setBuscarVincular(''); setResultadosVinc([]); setModalVincular(true); }}>
+              <Text style={s.vincularBtnTxt}>🔗 Vincular</Text>
+            </TouchableOpacity>
+          </View>
+
+          {loadingGrupo ? (
+            <ActivityIndicator size="small" color="#1565C0" style={{ marginBottom: 12 }} />
+          ) : grupo && grupo.clientes?.length > 1 ? (
+            <View style={s.grupoCard}>
+              {grupo.clientes.map(c => (
+                <View key={c.id} style={[s.grupoItem, c.id === clienteId && s.grupoItemActual]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.grupoNombre}>{c.nombre} {c.apellido}{c.id === clienteId ? ' (este)' : ''}</Text>
+                    <Text style={s.grupoSaldo}>Saldo: {fmt(c.saldo_total)} · {(c.cuentas||[]).length} cuenta{(c.cuentas||[]).length!==1?'s':''}</Text>
+                  </View>
+                  {c.id !== clienteId && (
+                    <TouchableOpacity onPress={() => desvincularCliente(c.id, `${c.nombre} ${c.apellido}`)} hitSlop={{top:8,bottom:8,left:8,right:8}}>
+                      <Text style={{ fontSize: 18, color: '#B71C1C' }}>✕</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ))}
+              <View style={s.grupoTotalRow}>
+                <Text style={s.grupoTotalLabel}>Total del grupo</Text>
+                <Text style={s.grupoTotalVal}>{fmt(grupo.saldo_total_grupo)}</Text>
+              </View>
+              <TouchableOpacity
+                style={s.abonarGrupoBtn}
+                onPress={() => { setMontoAbonoGrupo(''); setModalAbonoGrupo(true); }}
+              >
+                <Text style={s.abonarGrupoBtnTxt}>💰 Abonar a todas las cuentas</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <Text style={s.grupoVacio}>Sin cuentas vinculadas. Usa "🔗 Vincular" si este cliente tiene otras cuentas a su nombre o de un familiar.</Text>
+          )}
+
           {/* ── Ventas ── */}
           <Text style={s.sectionTitle}>Ventas activas</Text>
 
@@ -492,6 +652,82 @@ export default function DetalleClienteScreen({ navigation, route }) {
           </View>
         </View>
       </Modal>
+      {/* Modal vincular cliente */}
+      <Modal visible={modalVincular} transparent animationType="slide" onRequestClose={() => setModalVincular(false)}>
+        <View style={s.modalOverlay}>
+          <View style={s.modalBox}>
+            <Text style={s.modalTitle}>🔗 Vincular cuenta</Text>
+            <Text style={s.modalSub}>Busca al otro cliente (nombre, DUI o teléfono)</Text>
+
+            <TextInput
+              style={s.modalInput}
+              value={buscarVincular}
+              onChangeText={(t) => { setBuscarVincular(t); buscarClienteParaVincular(t); }}
+              placeholder="Ej: Ana Escobar"
+              autoFocus
+            />
+
+            {buscandoVinc ? (
+              <ActivityIndicator size="small" color="#1565C0" style={{ marginTop: 16 }} />
+            ) : (
+              <ScrollView style={{ maxHeight: 260, marginTop: 12 }}>
+                {resultadosVinc.map(c => (
+                  <TouchableOpacity
+                    key={c.id}
+                    style={s.resultadoVincItem}
+                    onPress={() => vincularCliente(c.id)}
+                    disabled={vinculando}
+                  >
+                    <Text style={s.resultadoVincNombre}>{c.nombre} {c.apellido}</Text>
+                    {c.dui ? <Text style={s.resultadoVincSub}>{c.dui}</Text> : null}
+                  </TouchableOpacity>
+                ))}
+                {buscarVincular.trim() && resultadosVinc.length === 0 && (
+                  <Text style={{ color: '#999', textAlign: 'center', padding: 16, fontSize: 13 }}>Sin resultados</Text>
+                )}
+              </ScrollView>
+            )}
+
+            <TouchableOpacity style={s.cancelBtn} onPress={() => setModalVincular(false)}>
+              <Text style={s.cancelBtnTxt}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal abono a todas las cuentas */}
+      <Modal visible={modalAbonoGrupo} transparent animationType="slide" onRequestClose={() => setModalAbonoGrupo(false)}>
+        <View style={s.modalOverlay}>
+          <View style={s.modalBox}>
+            <Text style={s.modalTitle}>💰 Abonar a todas las cuentas</Text>
+            <Text style={s.modalSub}>Total del grupo: {fmt(grupo?.saldo_total_grupo)}</Text>
+
+            <Text style={s.modalLabel}>Monto recibido *</Text>
+            <TextInput
+              style={s.modalInput}
+              value={montoAbonoGrupo}
+              onChangeText={setMontoAbonoGrupo}
+              placeholder="Ej: 150.00"
+              keyboardType="numeric"
+              autoFocus
+            />
+            <Text style={{ color: '#888', fontSize: 12, marginTop: 8 }}>
+              El monto se repartirá automáticamente entre las cuentas del grupo, empezando por la más antigua.
+            </Text>
+
+            <TouchableOpacity
+              style={[s.guardarBtn, procesandoAbono && { opacity: 0.6 }]}
+              onPress={abonarATodasLasCuentas}
+              disabled={procesandoAbono}
+            >
+              <Text style={s.guardarBtnTxt}>{procesandoAbono ? 'Procesando...' : '💰 Aplicar abono'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.cancelBtn} onPress={() => setModalAbonoGrupo(false)}>
+              <Text style={s.cancelBtnTxt}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -596,4 +832,25 @@ const s = StyleSheet.create({
   guardarBtnTxt:{ color:'#fff', fontWeight:'800', fontSize:15 },
   cancelBtn:    { marginTop:10, alignItems:'center', paddingVertical:10 },
   cancelBtnTxt: { color:'#999', fontSize:14 },
+
+  // ── Grupo familiar ──
+  grupoHeaderRow: { flexDirection:'row', alignItems:'center', justifyContent:'space-between', marginHorizontal:16, marginTop:16, marginBottom:8 },
+  vincularBtnTxt: { color:'#1565C0', fontWeight:'700', fontSize:13 },
+  grupoCard: {
+    backgroundColor:'#fff', marginHorizontal:12, marginBottom:10, borderRadius:16, padding:14,
+    elevation:2, shadowColor:'#000', shadowOffset:{width:0,height:1}, shadowOpacity:0.06,
+  },
+  grupoItem: { flexDirection:'row', alignItems:'center', paddingVertical:8, borderBottomWidth:1, borderBottomColor:'#f0f0f0' },
+  grupoItemActual: { backgroundColor:'#f3f7fd', borderRadius:8, paddingHorizontal:8 },
+  grupoNombre: { color:'#1a1a1a', fontSize:13, fontWeight:'700' },
+  grupoSaldo:  { color:'#888', fontSize:11, marginTop:2 },
+  grupoTotalRow: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', paddingTop:10, marginTop:4 },
+  grupoTotalLabel: { color:'#666', fontSize:13, fontWeight:'700' },
+  grupoTotalVal: { color:'#1565C0', fontSize:17, fontWeight:'900' },
+  abonarGrupoBtn: { backgroundColor:'#2e7d32', borderRadius:10, paddingVertical:12, alignItems:'center', marginTop:12 },
+  abonarGrupoBtnTxt: { color:'#fff', fontWeight:'800', fontSize:13 },
+  grupoVacio: { color:'#999', fontSize:12, marginHorizontal:16, marginBottom:12, lineHeight:17 },
+  resultadoVincItem: { paddingVertical:12, borderBottomWidth:1, borderBottomColor:'#f0f0f0' },
+  resultadoVincNombre: { color:'#1a1a1a', fontSize:14, fontWeight:'700' },
+  resultadoVincSub: { color:'#999', fontSize:12, marginTop:2 },
 });

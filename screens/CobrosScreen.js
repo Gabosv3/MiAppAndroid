@@ -382,17 +382,21 @@ export default function CobrosScreen({ navigation }) {
           </View>
         </View>
         {!modoReorden && (
-          <View style={s.chipsRow}>
-            <View style={s.chip}><Text style={s.chipTxt}>📍 {totalRutas} ruta{totalRutas!==1?'s':''}</Text></View>
-            <View style={s.chip}><Text style={s.chipTxt}>👥 {totalClientes} clientes</Text></View>
-            {pagosPend > 0 && <View style={s.chipPend}><Text style={s.chipPendTxt}>⏳ {pagosPend} por sync</Text></View>}
-            <TouchableOpacity style={s.chipBtn} onPress={() => navigation.navigate('MapaCobros', { clientes: todos })}>
-              <Text style={s.chipBtnTxt}>🗺️ Mapa</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.chipBtn} onPress={entrarReorden}>
-              <Text style={s.chipBtnTxt}>⇅ Orden</Text>
-            </TouchableOpacity>
-          </View>
+          <>
+            <View style={s.chipsRow}>
+              <View style={s.chip}><Text style={s.chipTxt}>📍 {totalRutas} ruta{totalRutas!==1?'s':''}</Text></View>
+              <View style={s.chip}><Text style={s.chipTxt}>👥 {totalClientes} clientes</Text></View>
+              {pagosPend > 0 && <View style={s.chipPend}><Text style={s.chipPendTxt}>⏳ {pagosPend} por sync</Text></View>}
+            </View>
+            <View style={s.actionsRow}>
+              <TouchableOpacity style={s.chipBtn} onPress={() => navigation.navigate('MapaCobros', { clientes: todos })}>
+                <Text style={s.chipBtnTxt}>🗺️ Mapa</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.chipBtn} onPress={entrarReorden}>
+                <Text style={s.chipBtnTxt}>⇅ Orden</Text>
+              </TouchableOpacity>
+            </View>
+          </>
         )}
       </View>
 
@@ -561,7 +565,8 @@ const s = StyleSheet.create({
   mapBtnTxt: { color:'#fff', fontSize:14, fontWeight:'600' },
   headerTitle: { color:'#fff', fontSize:30, fontWeight:'800' },
   headerSub:   { color:'rgba(255,255,255,0.75)', fontSize:13, marginTop:2 },
-  chipsRow:    { flexDirection:'row', gap:8 },
+  chipsRow:    { flexDirection:'row', gap:8, flexWrap:'wrap' },
+  actionsRow:  { flexDirection:'row', gap:8, flexWrap:'wrap', marginTop:8 },
   chip:        { backgroundColor:'rgba(255,255,255,0.2)', borderRadius:20, paddingHorizontal:14, paddingVertical:6 },
   chipTxt:     { color:'#fff', fontSize:12, fontWeight:'600' },
   chipPend:    { backgroundColor:'#F5A623', borderRadius:20, paddingHorizontal:14, paddingVertical:6 },
