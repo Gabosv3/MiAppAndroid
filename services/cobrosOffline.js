@@ -11,16 +11,22 @@ const KEYS = {
   correlativo: 'COBROS_CORRELATIVO_LOCAL',
 };
 
-// ─── CORRELATIVO DE RECIBO (por dispositivo) ─────────────────────────────────
+// ─── CORRELATIVO DE RECIBO (por dispositivo + cobrador) ──────────────────────
 // Cada cobro registrado (con o sin conexión) recibe un número de recibo propio,
 // generado en el momento en el teléfono. Es independiente del número de venta:
 // un cliente puede tener 1 venta y 5 recibos de abonos distintos a lo largo del
 // tiempo. Al no depender del servidor, funciona igual con o sin conexión.
-export const generarNumeroRecibo = async () => {
+//
+// El contador es local por teléfono, así que si dos cobradores usan teléfonos
+// distintos podrían generar el mismo consecutivo (ej. ambos llegan a "5" el mismo
+// día). Para que los recibos sean distinguibles entre cobradores, se incluye el
+// ID del cobrador en el número: REC-{cobradorId}-{consecutivo}, ej. REC-12-000005.
+export const generarNumeroRecibo = async (cobradorId) => {
   const raw = await AsyncStorage.getItem(KEYS.correlativo);
   const siguiente = (raw ? parseInt(raw, 10) : 0) + 1;
   await AsyncStorage.setItem(KEYS.correlativo, String(siguiente));
-  return `REC-${String(siguiente).padStart(6, '0')}`;
+  const prefijo = cobradorId != null ? `${cobradorId}-` : '';
+  return `REC-${prefijo}${String(siguiente).padStart(6, '0')}`;
 };
 
 const fechaHoy = fechaHoyLocal; // hora de El Salvador, no UTC

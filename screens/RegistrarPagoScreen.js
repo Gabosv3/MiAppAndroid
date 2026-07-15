@@ -118,7 +118,9 @@ export default function RegistrarPagoScreen({ navigation, route }) {
 
     // Correlativo propio del recibo, generado en el teléfono al momento del cobro —
     // funciona con o sin conexión porque no depende de respuesta del servidor.
-    const numeroRecibo = await generarNumeroRecibo();
+    // Incluye el ID del cobrador para que los recibos sean distinguibles entre
+    // cobradores distintos aunque cada uno lleve su propio contador local.
+    const numeroRecibo = await generarNumeroRecibo(user?.id);
 
     if (!isOnline) {
       try {
