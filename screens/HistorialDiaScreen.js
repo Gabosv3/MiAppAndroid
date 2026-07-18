@@ -6,8 +6,30 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import api from '../services/api';
+import { useConnectivity } from '../services/connectivity';
 import { leerHistorial } from '../services/cobrosOffline';
 import { fechaHoyLocal, fechaLocalDesdeISO } from '../services/dateUtils';
+
+// Normaliza la respuesta del servidor (snake_case) al mismo shape que usa
+// el historial local (camelCase), para que el resto de la pantalla no tenga
+// que distinguir de dónde vino cada registro.
+const normalizarItemServidor = (it) => ({
+  id: `srv-${it.tipo}-${it.cliente_id}-${it.fecha}`,
+  tipo: it.tipo === 'visita' ? 'visita' : 'pago',
+  clienteId: it.cliente_id,
+  clienteNombre: it.cliente_nombre,
+  clienteWhatsapp: it.cliente_whatsapp || null,
+  ventaNumero: it.venta_numero || null,
+  numeroRecibo: it.numero_recibo || null,
+  producto: it.producto || null,
+  monto: it.monto || 0,
+  metodo: it.metodo || null,
+  resultadoVisita: it.resultado_visita || null,
+  observaciones: it.observaciones || null,
+  fecha: it.fecha,
+  proximaVisita: it.proxima_visita || null,
+});
 
 const fmt   = (n) => `$${Number(n || 0).toFixed(2)}`;
 const hoy   = fechaHoyLocal;
@@ -32,7 +54,7 @@ const VISITA_INFO = {
   abono_previo:  { label: 'Ya abonó mensualidad',icon: '✅', color: '#00695c', bg: '#e0f2f1' },
 };
 
-const buildReciboHtml = ({ clienteNombre, ventaNumero, monto, metodo, proximaVisita, fecha }) => {
+const buildReciboHtml = ({ clienteNombre, ventaNumero, producto, numeroRecibo, monto, metodo, proximaVisita, fecha }) => {
   const fechaFmt = new Date(fecha).toLocaleDateString('es-SV');
   const horaFmt = new Date(fecha).toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit', hour12: true });
   const proxFmt = proximaVisita
@@ -59,10 +81,12 @@ const buildReciboHtml = ({ clienteNombre, ventaNumero, monto, metodo, proximaVis
     </div>
     <hr class="divider"/>
     <div class="center" style="font-size:11px;font-weight:800;margin-bottom:6px">RECIBO DE COBRO</div>
+    <div class="row"><span class="lbl"><b>Recibo:</b></span><span class="val">${numeroRecibo||'N/A'}</span></div>
     <div class="row"><span class="lbl"><b>Fecha:</b></span><span class="val">${fechaFmt}</span></div>
     <div class="row"><span class="lbl"><b>Hora:</b></span><span class="val">${horaFmt}</span></div>
     <div class="row"><span class="lbl"><b>Cliente:</b></span><span class="val">${clienteNombre}</span></div>
     ${ventaNumero ? `<div class="row"><span class="lbl"><b>Venta:</b></span><span class="val">${ventaNumero}</span></div>` : ''}
+    ${producto ? `<div class="row"><span class="lbl"><b>Producto:</b></span><span class="val">${producto}</span></div>` : ''}
     <div class="row"><span class="lbl"><b>Método:</b></span><span class="val">${metodo}</span></div>
     <hr class="divider"/>
     <div class="row abono"><span class="lbl">Monto cobrado:</span><span class="val">$${Number(monto).toFixed(2)}</span></div>
@@ -93,9 +117,10 @@ const mensajeCobro = (item) => {
   return `🏪 *DISTRIBUIDORA BM*
 📋 *RECIBO DE COBRO*
 ━━━━━━━━━━━━━━━━━━━━
+🧾 Recibo: ${item.numeroRecibo || 'N/A'}
 📅 Fecha: ${fechaFmt}
 👤 Cliente: ${item.clienteNombre}
-🔖 Venta: ${item.ventaNumero || 'N/A'}
+🔖 Venta: ${item.ventaNumero || 'N/A'}${item.producto ? `\n📦 Producto: ${item.producto}` : ''}
 💳 Método: ${item.metodo}
 
 💰 *Monto abonado: ${fmt(item.monto)}*
@@ -123,18 +148,37 @@ export default function HistorialDiaScreen({ navigation }) {
   const [items,   setItems]   = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
+  const [esCache,  setEsCache]  = useState(false);
+  const { isOnline } = useConnectivity();
 
   useFocusEffect(useCallback(() => {
     (async () => {
       setLoading(true);
+
+      // Fuente principal: servidor (sobrevive logout, cambio de teléfono, etc.)
+      // La caché local solo se usa como respaldo cuando no hay conexión.
+      if (isOnline) {
+        try {
+          const { data } = await api.get('/cobros/historial/hoy');
+          const deServidor = (data.items || []).map(normalizarItemServidor);
+          setItems(deServidor);
+          setEsCache(false);
+          setLoading(false);
+          return;
+        } catch {
+          // Si falla la petición (ej. endpoint aún no desplegado), cae al local
+        }
+      }
+
       const todos = await leerHistorial();
       const fechaHoy = hoy();
       // Filtrar solo los del día de hoy (en hora de El Salvador, no UTC)
       const deHoy = todos.filter(h => fechaLocalDesdeISO(h.fecha) === fechaHoy);
       setItems(deHoy);
+      setEsCache(true);
       setLoading(false);
     })();
-  }, []));
+  }, [isOnline]));
 
   const cobros  = items.filter(h => h.tipo !== 'visita');
   const visitas = items.filter(h => h.tipo === 'visita');
@@ -232,6 +276,12 @@ export default function HistorialDiaScreen({ navigation }) {
         </View>
       </View>
 
+      {esCache && !loading && (
+        <View style={s.offlineBanner}>
+          <Text style={s.offlineTxt}>📴 Sin conexión — mostrando historial guardado en este teléfono</Text>
+        </View>
+      )}
+
       {loading ? (
         <ActivityIndicator color="#1565C0" style={{ marginTop: 40 }}/>
       ) : items.length === 0 ? (
@@ -296,10 +346,22 @@ export default function HistorialDiaScreen({ navigation }) {
                         <Text style={s.modalLabel}>Método</Text>
                         <Text style={s.modalValue}>{(METODO_ICON[selected.metodo] || '💳')} {selected.metodo}</Text>
                       </View>
+                      {selected.numeroRecibo && (
+                        <View style={s.modalRow}>
+                          <Text style={s.modalLabel}>Recibo</Text>
+                          <Text style={s.modalValue}>{selected.numeroRecibo}</Text>
+                        </View>
+                      )}
                       {selected.ventaNumero && (
                         <View style={s.modalRow}>
                           <Text style={s.modalLabel}>Venta</Text>
                           <Text style={s.modalValue}>{selected.ventaNumero}</Text>
+                        </View>
+                      )}
+                      {selected.producto && (
+                        <View style={s.modalRow}>
+                          <Text style={s.modalLabel}>Producto</Text>
+                          <Text style={s.modalValue}>{selected.producto}</Text>
                         </View>
                       )}
                     </>
@@ -359,6 +421,9 @@ const s = StyleSheet.create({
   backTxt:     { color: '#fff', fontSize: 24, fontWeight: '700' },
   headerTitle: { color: '#fff', fontSize: 20, fontWeight: '800' },
   headerSub:   { color: 'rgba(255,255,255,0.75)', fontSize: 13 },
+
+  offlineBanner:{ backgroundColor: '#fff3cd', margin: 12, borderRadius: 10, padding: 10 },
+  offlineTxt:   { color: '#856404', fontSize: 12, fontWeight: '600', textAlign: 'center' },
 
   totalCard: {
     backgroundColor: '#1565C0', marginHorizontal: 12, marginTop: 12,

@@ -1049,6 +1049,7 @@ export default function NuevaVentaScreen({ navigation }) {
                 value={cfgEmailRequerido}
                 onValueChange={val => {
                   setCfgEmailRequerido(val);
+                  setCcEmailRequerido(val); // mantener sincronizado sin esperar a remontar la pantalla
                   guardarConfig({ emailRequerido: val });
                 }}
                 trackColor={{ false: colors.border, true: colors.accent }}
