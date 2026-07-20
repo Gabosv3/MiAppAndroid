@@ -7,7 +7,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
 import api, { esErrorTransitorio } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
-import { guardarClienteCache, leerClienteCache, generarNumeroRecibo } from '../services/cobrosOffline';
+import { guardarClienteCache, leerClienteCache, generarNumeroRecibo, encolarPago, guardarEnHistorial, marcarClienteVisitado } from '../services/cobrosOffline';
 import * as offlineQueue from '../services/offlineQueue';
 import * as Location from 'expo-location';
 import { useAuth } from '../context/AuthContext';
@@ -75,14 +75,33 @@ export default function DetalleClienteScreen({ navigation, route }) {
   const vincularCliente = async (otroId) => {
     setVinculando(true);
     try {
-      await api.post(`/clientes/${clienteId}/vincular`, { cliente_id_vincular: otroId });
+      if (isOnline) {
+        await api.post(`/clientes/${clienteId}/vincular`, { cliente_id_vincular: otroId });
+        await cargarGrupo();
+        Alert.alert('✅ Vinculado', 'Las cuentas fueron vinculadas correctamente.');
+      } else {
+        await offlineQueue.enqueueRequest({
+          method: 'POST', url: `/clientes/${clienteId}/vincular`,
+          label: `Vincular cliente ${otroId}`, data: { cliente_id_vincular: otroId },
+        });
+        Alert.alert('📴 Guardado sin conexión', 'La vinculación se aplicará cuando recuperes la señal.');
+      }
       setModalVincular(false);
       setBuscarVincular('');
       setResultadosVinc([]);
-      await cargarGrupo();
-      Alert.alert('✅ Vinculado', 'Las cuentas fueron vinculadas correctamente.');
     } catch (e) {
-      Alert.alert('Error', e?.response?.data?.message || 'No se pudo vincular.');
+      if (esErrorTransitorio(e)) {
+        await offlineQueue.enqueueRequest({
+          method: 'POST', url: `/clientes/${clienteId}/vincular`,
+          label: `Vincular cliente ${otroId}`, data: { cliente_id_vincular: otroId },
+        });
+        setModalVincular(false);
+        setBuscarVincular('');
+        setResultadosVinc([]);
+        Alert.alert('📴 Guardado sin conexión', 'La vinculación se aplicará cuando recuperes la señal.');
+      } else {
+        Alert.alert('Error', e?.response?.data?.message || 'No se pudo vincular.');
+      }
     } finally {
       setVinculando(false);
     }
@@ -95,11 +114,23 @@ export default function DetalleClienteScreen({ navigation, route }) {
       [
         { text: 'Cancelar', style: 'cancel' },
         { text: 'Desvincular', style: 'destructive', onPress: async () => {
+          const encolar = async () => {
+            await offlineQueue.enqueueRequest({
+              method: 'POST', url: `/clientes/${otroId}/desvincular`,
+              label: `Desvincular cliente ${otroId}`, data: {},
+            });
+            Alert.alert('📴 Guardado sin conexión', 'Se desvinculará cuando recuperes la señal.');
+          };
           try {
-            await api.post(`/clientes/${otroId}/desvincular`);
-            await cargarGrupo();
+            if (isOnline) {
+              await api.post(`/clientes/${otroId}/desvincular`);
+              await cargarGrupo();
+            } else {
+              await encolar();
+            }
           } catch (e) {
-            Alert.alert('Error', e?.response?.data?.message || 'No se pudo desvincular.');
+            if (esErrorTransitorio(e)) await encolar();
+            else Alert.alert('Error', e?.response?.data?.message || 'No se pudo desvincular.');
           }
         }},
       ]
@@ -129,40 +160,74 @@ export default function DetalleClienteScreen({ navigation, route }) {
     setProcesandoAbono(true);
     let restante = monto;
     const aplicados = []; // líneas que sí se cobraron, para el recibo consolidado
+    let huboOffline = false;
 
     for (const cta of cuentas) {
       if (restante <= 0) break;
       const aPagar = Math.min(restante, cta.saldo);
       if (aPagar <= 0) continue;
-      try {
-        const { data } = await api.post(`/cobros/clientes/${cta.cliente_id}/pagar`, {
-          monto: aPagar,
-          metodo_pago: 'efectivo',
-          venta_id: cta.venta_id,
+
+      // Aplica el abono a UNA cuenta: si hay conexión intenta online; si no
+      // hay conexión o el servidor falla momentáneamente, encola offline en
+      // vez de descartar el pago — antes esto ni siquiera se intentaba sin red.
+      const encolarLocal = async () => {
+        const numeroRecibo = await generarNumeroRecibo(user?.id);
+        const pagoEncolado = await encolarPago({
+          clienteId: cta.cliente_id, clienteNombre: cta.clienteNombre,
+          ventaId: cta.venta_id, ventaNumero: cta.venta_numero || null, numeroRecibo,
+          monto: aPagar, metodo: 'efectivo',
         });
-        aplicados.push({
-          clienteNombre: cta.clienteNombre,
-          producto: cta.producto,
-          ventaNumero: cta.venta_numero || cta.venta_id,
-          monto: aPagar,
-          numeroRecibo: data?.numero_recibo || null,
-          ok: true,
+        await guardarEnHistorial({
+          clienteId: cta.cliente_id, clienteNombre: cta.clienteNombre,
+          ventaNumero: cta.venta_numero || null, numeroRecibo, producto: cta.producto,
+          monto: aPagar, metodo: 'efectivo',
+          pagoOfflineId: pagoEncolado.id,
+          resultado: { ok: true, mensaje: 'Cobro pendiente de envío (offline)', proxima_cuota: null },
         });
-        restante -= aPagar;
-      } catch (e) {
-        aplicados.push({ clienteNombre: cta.clienteNombre, producto: cta.producto, monto: aPagar, ok: false });
+        await marcarClienteVisitado(cta.cliente_id);
+        return { numeroRecibo, ok: true, offline: true };
+      };
+
+      let resultado;
+      if (!isOnline) {
+        resultado = await encolarLocal();
+      } else {
+        try {
+          const { data } = await api.post(`/cobros/clientes/${cta.cliente_id}/pagar`, {
+            monto: aPagar,
+            metodo_pago: 'efectivo',
+            venta_id: cta.venta_id,
+          });
+          resultado = { numeroRecibo: data?.numero_recibo || null, ok: true, offline: false };
+        } catch (e) {
+          resultado = esErrorTransitorio(e) ? await encolarLocal() : { ok: false, offline: false };
+        }
       }
+
+      if (resultado.offline) huboOffline = true;
+      aplicados.push({
+        clienteNombre: cta.clienteNombre,
+        producto: cta.producto,
+        ventaNumero: cta.venta_numero || cta.venta_id,
+        monto: aPagar,
+        numeroRecibo: resultado.numeroRecibo || null,
+        ok: resultado.ok,
+      });
+      if (resultado.ok) restante -= aPagar;
     }
 
     setProcesandoAbono(false);
     setModalAbonoGrupo(false);
     setMontoAbonoGrupo('');
-    await cargarGrupo();
-    await cargar();
+    await cargarGrupo(); // no-op si está offline
+    await cargar(); // ya maneja su propio fallback a caché si está offline
 
     const huboExito = aplicados.some(a => a.ok);
     if (huboExito) {
       await imprimirReciboGrupal({ monto, restante, aplicados });
+      if (huboOffline) {
+        Alert.alert('📴 Algunos abonos quedaron sin conexión', 'Se enviarán automáticamente cuando recuperes la señal.');
+      }
     } else {
       Alert.alert('Sin aplicar', 'No se pudo aplicar el abono a ninguna cuenta.');
     }
@@ -294,17 +359,31 @@ export default function DetalleClienteScreen({ navigation, route }) {
       return;
     }
     setSavingTel(true);
-    try {
-      await api.patch(`/clientes/${clienteId}/telefonos`, {
-        ...(telNormal.trim()   && { telefono_normal:   telNormal.trim() }),
-        ...(telWhatsapp.trim() && { telefono_whatsapp: telWhatsapp.trim() }),
+    const payload = {
+      ...(telNormal.trim()   && { telefono_normal:   telNormal.trim() }),
+      ...(telWhatsapp.trim() && { telefono_whatsapp: telWhatsapp.trim() }),
+    };
+    const encolar = async () => {
+      await offlineQueue.enqueueRequest({
+        method: 'PATCH', url: `/clientes/${clienteId}/telefonos`,
+        label: `Teléfonos de ${clienteNombre}`, data: payload,
       });
       setModalTel(false);
-      setLoading(true);
-      cargar();
-      Alert.alert('✅ Listo', 'Teléfonos actualizados correctamente');
+      Alert.alert('📴 Guardado sin conexión', 'Los teléfonos se actualizarán cuando recuperes la señal.');
+    };
+    try {
+      if (isOnline) {
+        await api.patch(`/clientes/${clienteId}/telefonos`, payload);
+        setModalTel(false);
+        setLoading(true);
+        cargar();
+        Alert.alert('✅ Listo', 'Teléfonos actualizados correctamente');
+      } else {
+        await encolar();
+      }
     } catch (e) {
-      Alert.alert('Error', e?.response?.data?.message || 'No se pudo actualizar');
+      if (esErrorTransitorio(e)) await encolar();
+      else Alert.alert('Error', e?.response?.data?.message || 'No se pudo actualizar');
     } finally {
       setSavingTel(false);
     }
@@ -316,17 +395,28 @@ export default function DetalleClienteScreen({ navigation, route }) {
       return;
     }
     setSavingRei(true);
-    try {
-      await api.post('/reintegros', {
-        venta_id: modalRei.ventaId,
-        motivo:   reiMotivo.trim(),
+    const payload = { venta_id: modalRei.ventaId, motivo: reiMotivo.trim() };
+    const encolar = async () => {
+      await offlineQueue.enqueueRequest({
+        method: 'POST', url: '/reintegros',
+        label: `Reintegro venta ${modalRei.ventaNumero || modalRei.ventaId}`, data: payload,
       });
       setModalRei(null);
       setReiMotivo('');
-      Alert.alert('✅ Reintegro creado', 'La venta fue enviada a reintegros correctamente.');
+      Alert.alert('📴 Guardado sin conexión', 'El reintegro se enviará cuando recuperes la señal.');
+    };
+    try {
+      if (isOnline) {
+        await api.post('/reintegros', payload);
+        setModalRei(null);
+        setReiMotivo('');
+        Alert.alert('✅ Reintegro creado', 'La venta fue enviada a reintegros correctamente.');
+      } else {
+        await encolar();
+      }
     } catch (e) {
-      const msg = e?.response?.data?.message || 'No se pudo crear el reintegro';
-      Alert.alert('Error', msg);
+      if (esErrorTransitorio(e)) await encolar();
+      else Alert.alert('Error', e?.response?.data?.message || 'No se pudo crear el reintegro');
     } finally {
       setSavingRei(false);
     }
@@ -358,20 +448,37 @@ export default function DetalleClienteScreen({ navigation, route }) {
       return;
     }
     setSavingNombre(true);
-    try {
-      const { data: resp } = await api.patch(`/clientes/${clienteId}/nombre`, {
-        ...(n && { nombre: n }),
-        ...(a && { apellido: a }),
+    const payload = { ...(n && { nombre: n }), ...(a && { apellido: a }) };
+    const encolar = async () => {
+      await offlineQueue.enqueueRequest({
+        method: 'PATCH', url: `/clientes/${clienteId}/nombre`,
+        label: `Nombre de ${clienteNombre}`, data: payload,
       });
       setModalNombre(false);
-      // Actualizar nombre en pantalla sin recargar todo
+      // Optimista: usamos lo que el cobrador tecleó, ya que no hay respuesta
+      // del servidor todavía. Se corrige solo si difiere al recargar online.
       setData(prev => ({
         ...prev,
-        cliente: { ...prev.cliente, nombre: resp.cliente?.nombre_completo || `${n} ${a}`.trim() },
+        cliente: { ...prev.cliente, nombre: `${n} ${a}`.trim() },
       }));
-      Alert.alert('✅ Listo', 'Nombre actualizado correctamente.');
+      Alert.alert('📴 Guardado sin conexión', 'El nombre se actualizará cuando recuperes la señal.');
+    };
+    try {
+      if (isOnline) {
+        const { data: resp } = await api.patch(`/clientes/${clienteId}/nombre`, payload);
+        setModalNombre(false);
+        // Actualizar nombre en pantalla sin recargar todo
+        setData(prev => ({
+          ...prev,
+          cliente: { ...prev.cliente, nombre: resp.cliente?.nombre_completo || `${n} ${a}`.trim() },
+        }));
+        Alert.alert('✅ Listo', 'Nombre actualizado correctamente.');
+      } else {
+        await encolar();
+      }
     } catch (e) {
-      Alert.alert('Error', e?.response?.data?.message || 'No se pudo actualizar el nombre.');
+      if (esErrorTransitorio(e)) await encolar();
+      else Alert.alert('Error', e?.response?.data?.message || 'No se pudo actualizar el nombre.');
     } finally {
       setSavingNombre(false);
     }
