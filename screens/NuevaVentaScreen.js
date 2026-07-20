@@ -34,6 +34,7 @@ import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
 import { extractTextFromImage } from '../services/ocr';
 import { fmtFechaCorta } from '../services/dateUtils';
+import FirmaPad from '../components/FirmaPad';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -115,21 +116,41 @@ export default function NuevaVentaScreen({ navigation }) {
   const [pagareLugar, setPagareLugar] = useState('Usulután');
   const [pagareFechaVenc, setPagareFechaVenc] = useState('');
   const [generandoPagare, setGenerandoPagare] = useState(false);
+  const [firmaBase64, setFirmaBase64] = useState(null);
+  const firmaPadRef = useRef(null);
 
   const abrirPagare = () => {
     setPagareNombreDeudor(cliente?.id ? cliente.nombre : '');
     setPagareDui('');
     setPagareDireccion('');
     setPagareLugar('Usulután');
+    setFirmaBase64(null);
     const d = new Date();
     d.setDate(d.getDate() + 30);
     setPagareFechaVenc(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
     setPagareModalVisible(true);
   };
 
+  const onFirmaCapturada = (data) => {
+    if (data === 'VACIA') {
+      Alert.alert('Firma vacía', 'El cliente debe firmar en el recuadro antes de guardar.');
+      return;
+    }
+    setFirmaBase64(data);
+  };
+
+  const limpiarFirma = () => {
+    firmaPadRef.current?.limpiar();
+    setFirmaBase64(null);
+  };
+
   const generarPagare = async () => {
     if (!pagareNombreDeudor.trim() || !pagareDui.trim()) {
       Alert.alert('Faltan datos', 'Ingresa al menos el nombre y el DUI del deudor.');
+      return;
+    }
+    if (!firmaBase64) {
+      Alert.alert('Falta la firma', 'El cliente debe firmar en el recuadro y tocar "Guardar firma" antes de generar el pagaré.');
       return;
     }
     setGenerandoPagare(true);
@@ -158,8 +179,9 @@ export default function NuevaVentaScreen({ navigation }) {
             h1{font-size:20px;text-align:center;margin-bottom:24px;letter-spacing:1px}
             table{width:100%;border-collapse:collapse;margin:16px 0}
             td{padding:6px 4px;border-bottom:1px solid #ddd;font-size:13px}
-            .firma{margin-top:70px;display:flex;justify-content:space-between}
+            .firma{margin-top:50px;display:flex;justify-content:space-between;align-items:flex-end}
             .firma div{width:45%;text-align:center;border-top:1px solid #333;padding-top:6px;font-size:12px}
+            .firma img{max-width:100%;max-height:70px;display:block;margin:0 auto 4px}
             .datos{margin:16px 0}
             .datos b{display:inline-block;min-width:140px}
           </style>
@@ -192,19 +214,19 @@ export default function NuevaVentaScreen({ navigation }) {
           </p>
 
           <div class="firma">
-            <div>Firma del deudor<br/>DUI: ${pagareDui}</div>
+            <div><img src="${firmaBase64}"/>Firma del deudor<br/>DUI: ${pagareDui}</div>
             <div>Distribuidora BM</div>
           </div>
         </body></html>`;
 
+      // Documento 100% digital: se genera el PDF y se comparte/guarda
+      // directamente, sin pasar por el diálogo de impresión física.
       const { uri } = await Print.printToFileAsync({ html, base64: false });
-      try {
-        await Print.printAsync({ uri });
-      } catch {
-        const puedeCompartir = await Sharing.isAvailableAsync();
-        if (puedeCompartir) {
-          await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Pagaré', UTI: 'com.adobe.pdf' });
-        }
+      const puedeCompartir = await Sharing.isAvailableAsync();
+      if (puedeCompartir) {
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Pagaré firmado', UTI: 'com.adobe.pdf' });
+      } else {
+        Alert.alert('Pagaré generado', `Guardado en:\n${uri}`);
       }
       setPagareModalVisible(false);
     } catch (e) {
@@ -1552,6 +1574,25 @@ export default function NuevaVentaScreen({ navigation }) {
               <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 10 }}>
                 El monto y las cuotas se toman automáticamente de los productos a crédito en el carrito.
               </Text>
+
+              <Text style={[s.pagareLabel, { color: colors.textMuted, marginTop: 16 }]}>Firma del cliente *</Text>
+              <FirmaPad ref={firmaPadRef} onFirma={onFirmaCapturada} />
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                <TouchableOpacity
+                  style={[s.pagareFirmaBtn, { borderColor: colors.border }]}
+                  onPress={limpiarFirma}
+                >
+                  <Text style={{ color: colors.textMuted, fontWeight: '600', fontSize: 12 }}>🗑️ Limpiar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[s.pagareFirmaBtn, { borderColor: colors.accent, flex: 1 }]}
+                  onPress={() => firmaPadRef.current?.exportar()}
+                >
+                  <Text style={{ color: colors.accent, fontWeight: '700', fontSize: 12 }}>
+                    {firmaBase64 ? '✅ Firma guardada — tocar para actualizar' : '💾 Guardar firma'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </ScrollView>
 
             <View style={s.confirmButtons}>
@@ -1559,11 +1600,11 @@ export default function NuevaVentaScreen({ navigation }) {
                 <Text style={{ color: colors.text, fontWeight: '600' }}>Cancelar</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[s.confirmBtn, s.confirmBtnConfirm, { backgroundColor: colors.accent }, generandoPagare && { opacity: 0.7 }]}
+                style={[s.confirmBtn, s.confirmBtnConfirm, { backgroundColor: colors.accent }, (generandoPagare || !firmaBase64) && { opacity: 0.5 }]}
                 onPress={generarPagare}
-                disabled={generandoPagare}
+                disabled={generandoPagare || !firmaBase64}
               >
-                {generandoPagare ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontWeight: '700' }}>Generar PDF</Text>}
+                {generandoPagare ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontWeight: '700' }}>Generar pagaré</Text>}
               </TouchableOpacity>
             </View>
           </View>
@@ -1987,6 +2028,7 @@ const styles = (c) => StyleSheet.create({
   pagareBtnTxt: { color: c.accent, fontSize: 13, fontWeight: '700' },
   pagareLabel: { fontSize: 12, fontWeight: '600', marginTop: 12, marginBottom: 4 },
   pagareInput: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9, fontSize: 14 },
+  pagareFirmaBtn: { borderWidth: 1.5, borderRadius: 8, paddingVertical: 9, paddingHorizontal: 14, alignItems: 'center' },
 
   // Modales
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
