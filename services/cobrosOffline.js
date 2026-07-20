@@ -108,7 +108,8 @@ const proximaVisita = (diasBase = 14) => {
 };
 
 export const guardarEnHistorial = async ({
-  clienteId, clienteNombre, clienteWhatsapp = null, ventaNumero, numeroRecibo, monto, metodo, resultado,
+  clienteId, clienteNombre, clienteCodigo = null, clienteWhatsapp = null,
+  ventaNumero, numeroRecibo, producto = null, monto, metodo, resultado,
   tipo = 'pago', resultadoVisita = null, observaciones = null,
   proximaVisitaFecha = null, pagoOfflineId = null,
 }) => {
@@ -119,9 +120,11 @@ export const guardarEnHistorial = async ({
     tipo,
     clienteId,
     clienteNombre,
+    clienteCodigo,
     clienteWhatsapp,
     ventaNumero,
     numeroRecibo,
+    producto,
     monto,
     metodo,
     resultadoVisita,
@@ -158,6 +161,8 @@ const actualizarHistorialOffline = async (pagoId, respuestaServidor) => {
       resultado: respuestaServidor,
       sincronizado: true,
       ...(respuestaServidor?.numero_recibo && { numeroRecibo: respuestaServidor.numero_recibo }),
+      ...(respuestaServidor?.producto && { producto: respuestaServidor.producto }),
+      ...(respuestaServidor?.cliente?.codigo_anterior && { clienteCodigo: respuestaServidor.cliente.codigo_anterior }),
     };
     await AsyncStorage.setItem(KEYS.historial, JSON.stringify(historial));
   }

@@ -133,9 +133,9 @@ export default function RegistrarPagoScreen({ navigation, route }) {
           referencia: referencia.trim(), notas: notas.trim(),
         });
         await guardarEnHistorial({
-          clienteId: cliente.id, clienteNombre: cliente.nombre,
+          clienteId: cliente.id, clienteNombre: cliente.nombre, clienteCodigo,
           clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
-          ventaNumero, numeroRecibo, monto: montoNum, metodo,
+          ventaNumero, numeroRecibo, producto, monto: montoNum, metodo,
           proximaVisitaFecha: proxVisita,
           pagoOfflineId: pagoEncolado.id,
           resultado: {
@@ -187,9 +187,9 @@ export default function RegistrarPagoScreen({ navigation, route }) {
       const codigoFinal = data.cliente?.codigo_anterior || codigoCliente;
       const proxVisita = calcProximaVisita();
       const histItem = await guardarEnHistorial({
-        clienteId: cliente.id, clienteNombre: cliente.nombre,
+        clienteId: cliente.id, clienteNombre: cliente.nombre, clienteCodigo: codigoFinal,
         clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
-        ventaNumero, numeroRecibo, monto: montoNum, metodo, resultado: data,
+        ventaNumero, numeroRecibo, producto: productoFinal, monto: montoNum, metodo, resultado: data,
         proximaVisitaFecha: proxVisita,
       });
       await marcarClienteVisitado(cliente.id);
@@ -230,9 +230,9 @@ export default function RegistrarPagoScreen({ navigation, route }) {
                 referencia: referencia.trim(), notas: notas.trim(),
               });
               await guardarEnHistorial({
-                clienteId: cliente.id, clienteNombre: cliente.nombre,
+                clienteId: cliente.id, clienteNombre: cliente.nombre, clienteCodigo,
                 clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
-                ventaNumero, numeroRecibo, monto: montoNum, metodo,
+                ventaNumero, numeroRecibo, producto, monto: montoNum, metodo,
                 proximaVisitaFecha: proxVisita,
                 pagoOfflineId: pagoEncolado.id,
                 resultado: { ok: true, mensaje: 'Cobro pendiente de envío (offline)', proxima_cuota: null },
