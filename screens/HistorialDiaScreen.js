@@ -11,29 +11,46 @@ import { useConnectivity } from '../services/connectivity';
 import { leerHistorial } from '../services/cobrosOffline';
 import { fechaHoyLocal, fechaLocalDesdeISO } from '../services/dateUtils';
 
-// Normaliza la respuesta real de GET /cobros/historial (solo pagos, sin
-// visitas) al mismo shape que usa el historial local, para que el resto de
-// la pantalla no tenga que distinguir de dónde vino cada registro.
-// Nota: este endpoint no devuelve numero_recibo ni numero_venta (solo se
-// entregan al momento del pago) — quedan null aquí, y la UI ya los omite
-// cuando faltan.
-const normalizarPagoServidor = (fechaDia) => (p) => ({
-  id: `srv-pago-${p.id}`,
-  tipo: 'pago',
-  clienteId: p.cliente?.id,
-  clienteNombre: p.cliente?.nombre,
-  clienteWhatsapp: p.cliente?.whatsapp || null,
-  ventaNumero: null,
-  numeroRecibo: null,
-  producto: (p.productos || []).map(x => x.nombre).join(', ') || null,
-  monto: p.monto || 0,
-  metodo: p.metodo_pago || null,
-  referencia: p.referencia || null,
-  resultadoVisita: null,
-  observaciones: null,
-  fecha: `${fechaDia}T${p.hora}:00`,
-  proximaVisita: null,
-});
+// Normaliza la respuesta real de GET /cobros/historial (items mezcla pagos
+// y visitas, distinguidos por `tipo`) al mismo shape que usa el historial
+// local, para que el resto de la pantalla no tenga que distinguir de dónde
+// vino cada registro.
+// Nota: numero_recibo no existe en ningún lado del backend todavía — la UI
+// ya lo omite cuando falta, sin romperse.
+const normalizarItemServidor = (fechaDia) => (it) => {
+  const base = {
+    id: `srv-${it.tipo}-${it.id}`,
+    tipo: it.tipo,
+    clienteId: it.cliente?.id,
+    clienteNombre: it.cliente?.nombre,
+    clienteWhatsapp: it.cliente?.whatsapp || null,
+    fecha: `${fechaDia}T${it.hora}:00`,
+  };
+
+  if (it.tipo === 'visita') {
+    return {
+      ...base,
+      resultadoVisita: it.resultado || null,
+      observaciones: it.observaciones || null,
+      proximaVisita: it.promesa_fecha || null,
+      fotoHogarUrl: it.foto_hogar_url || null,
+      ventaNumero: null, numeroRecibo: null, producto: null, monto: 0, metodo: null,
+    };
+  }
+
+  return {
+    ...base,
+    ventaNumero: it.numero_venta || null,
+    numeroRecibo: null,
+    producto: (it.productos || []).map(x => x.nombre).join(', ') || null,
+    monto: it.monto || 0,
+    metodo: it.metodo_pago || null,
+    referencia: it.referencia || null,
+    resultadoVisita: null,
+    observaciones: null,
+    proximaVisita: null,
+  };
+};
 
 const fmt   = (n) => `$${Number(n || 0).toFixed(2)}`;
 const hoy   = fechaHoyLocal;
@@ -159,28 +176,19 @@ export default function HistorialDiaScreen({ navigation }) {
     (async () => {
       setLoading(true);
 
-      // Fuente principal para PAGOS: servidor (sobrevive logout, cambio de
-      // teléfono, etc.). El endpoint no devuelve visitas sin pago, así que
-      // esas se completan con la caché local del día — solo se pierden si
-      // el cobrador cierra sesión antes de que sincronicen a algún lado.
+      // Fuente principal: servidor (sobrevive logout, cambio de teléfono,
+      // etc.) — trae pagos Y visitas mezclados, ya ordenados por hora.
+      // La caché local solo se usa como respaldo cuando no hay conexión.
       if (isOnline) {
         try {
           const { data } = await api.get('/cobros/historial'); // sin ?fecha= = hoy
-          const pagosServidor = (data.pagos || []).map(normalizarPagoServidor(data.fecha));
-
-          const todosLocal = await leerHistorial();
-          const fechaHoy = hoy();
-          const visitasHoy = todosLocal.filter(h => h.tipo === 'visita' && fechaLocalDesdeISO(h.fecha) === fechaHoy);
-
-          const combinado = [...pagosServidor, ...visitasHoy]
-            .sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
-
-          setItems(combinado);
+          const deServidor = (data.items || []).map(normalizarItemServidor(data.fecha));
+          setItems(deServidor);
           setEsCache(false);
           setLoading(false);
           return;
         } catch {
-          // Si falla la petición (ej. endpoint caído), cae al local completo
+          // Si falla la petición (ej. endpoint caído), cae al local
         }
       }
 
