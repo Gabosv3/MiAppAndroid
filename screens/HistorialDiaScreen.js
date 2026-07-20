@@ -38,6 +38,22 @@ const normalizarItemServidor = (fechaDia) => (it) => {
     };
   }
 
+  if (it.tipo === 'gasto') {
+    return {
+      ...base,
+      clienteNombre: it.vehiculo ? `Vehículo ${it.vehiculo}` : 'Gasto',
+      tipoGasto: it.tipo_gasto || null,
+      categoriaVehiculo: it.categoria_vehiculo || null,
+      monto: it.monto || 0,
+      comprobanteUrl: it.comprobante_url || null,
+      observaciones: it.descripcion || null,
+      estadoGasto: it.estado || null,
+      descuentaCobroDiario: !!it.descuenta_cobro_diario,
+      ventaNumero: null, numeroRecibo: null, producto: null, metodo: null,
+      resultadoVisita: null, proximaVisita: null,
+    };
+  }
+
   return {
     ...base,
     ventaNumero: it.numero_venta || null,
@@ -202,9 +218,11 @@ export default function HistorialDiaScreen({ navigation }) {
     })();
   }, [isOnline]));
 
-  const cobros  = items.filter(h => h.tipo !== 'visita');
+  const cobros  = items.filter(h => h.tipo === 'pago');
   const visitas = items.filter(h => h.tipo === 'visita');
+  const gastos  = items.filter(h => h.tipo === 'gasto');
   const totalCobrado = cobros.reduce((s, h) => s + Number(h.monto || 0), 0);
+  const totalGastado = gastos.filter(h => h.descuentaCobroDiario).reduce((s, h) => s + Number(h.monto || 0), 0);
 
   const imprimir = async (item) => {
     try {
@@ -235,7 +253,35 @@ export default function HistorialDiaScreen({ navigation }) {
     }
   };
 
+  const ESTADO_GASTO = {
+    pendiente: { label: 'Pendiente', color: '#e65100' },
+    aprobado:  { label: 'Aprobado',  color: '#2e7d32' },
+    rechazado: { label: 'Rechazado', color: '#c62828' },
+  };
+
   const renderItem = ({ item, index }) => {
+    if (item.tipo === 'gasto') {
+      const est = ESTADO_GASTO[item.estadoGasto] || { label: item.estadoGasto, color: '#666' };
+      return (
+        <TouchableOpacity style={s.card} onPress={() => setSelected(item)} activeOpacity={0.7}>
+          <View style={[s.cardLeft, { backgroundColor: '#fff3e0' }]}>
+            <Text style={{ fontSize: 18 }}>🧾</Text>
+          </View>
+          <View style={s.cardBody}>
+            <View style={s.cardRow}>
+              <Text style={s.cardNombre} numberOfLines={1}>{item.clienteNombre}</Text>
+              <Text style={[s.cardMonto, { color: '#e65100' }]}>-{fmt(item.monto)}</Text>
+            </View>
+            <View style={s.cardRow}>
+              <Text style={s.cardMeta} numberOfLines={1}>
+                {item.categoriaVehiculo || item.tipoGasto} · <Text style={{ color: est.color, fontWeight: '700' }}>{est.label}</Text>
+              </Text>
+              <Text style={s.cardHora}>{hora(item.fecha)}</Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+      );
+    }
     if (item.tipo === 'visita') {
       const v = VISITA_INFO[item.resultadoVisita] || { label: item.resultadoVisita, icon: '📍', color: '#666', bg: '#f5f5f5' };
       return (
@@ -294,6 +340,7 @@ export default function HistorialDiaScreen({ navigation }) {
           <Text style={s.headerSub}>
             {cobros.length} cobro{cobros.length !== 1 ? 's' : ''}
             {visitas.length > 0 ? `  ·  ${visitas.length} visita${visitas.length !== 1 ? 's' : ''}` : ''}
+            {gastos.length > 0 ? `  ·  ${gastos.length} gasto${gastos.length !== 1 ? 's' : ''}` : ''}
           </Text>
         </View>
       </View>
@@ -313,9 +360,17 @@ export default function HistorialDiaScreen({ navigation }) {
         </View>
       ) : (<>
         {items.length > 0 && (
-          <View style={s.totalCard}>
-            <Text style={s.totalLabel}>Total cobrado hoy</Text>
-            <Text style={s.totalValor}>{fmt(totalCobrado)}</Text>
+          <View style={s.totalRow}>
+            <View style={s.totalCard}>
+              <Text style={s.totalLabel}>Cobrado hoy</Text>
+              <Text style={s.totalValor}>{fmt(totalCobrado)}</Text>
+            </View>
+            {gastos.length > 0 && (
+              <View style={[s.totalCard, { backgroundColor: '#e65100' }]}>
+                <Text style={s.totalLabel}>Gastado hoy</Text>
+                <Text style={s.totalValor}>{fmt(totalGastado)}</Text>
+              </View>
+            )}
           </View>
         )}
         <FlatList
@@ -333,17 +388,21 @@ export default function HistorialDiaScreen({ navigation }) {
           <View style={s.modalOverlay}>
             <View style={s.modalBox}>
               <View style={s.modalHeader}>
-                <Text style={s.modalTitle}>{selected.tipo === 'visita' ? 'Detalle de la visita' : 'Detalle del cobro'}</Text>
+                <Text style={s.modalTitle}>
+                  {selected.tipo === 'visita' ? 'Detalle de la visita' : selected.tipo === 'gasto' ? 'Detalle del gasto' : 'Detalle del cobro'}
+                </Text>
                 <TouchableOpacity onPress={() => setSelected(null)} style={s.modalClose}>
                   <Text style={s.modalCloseTxt}>✕</Text>
                 </TouchableOpacity>
               </View>
               <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
                 <View style={s.modalSection}>
-                  <View style={s.modalRow}>
-                    <Text style={s.modalLabel}>Cliente</Text>
-                    <Text style={s.modalValue}>{selected.clienteNombre}</Text>
-                  </View>
+                  {selected.tipo !== 'gasto' && (
+                    <View style={s.modalRow}>
+                      <Text style={s.modalLabel}>Cliente</Text>
+                      <Text style={s.modalValue}>{selected.clienteNombre}</Text>
+                    </View>
+                  )}
 
                   {selected.tipo === 'visita' ? (
                     <>
@@ -357,6 +416,35 @@ export default function HistorialDiaScreen({ navigation }) {
                         <Text style={s.modalLabel}>Observaciones</Text>
                         <Text style={[s.modalValue, { flex: 1, textAlign: 'right' }]}>{selected.observaciones || '—'}</Text>
                       </View>
+                    </>
+                  ) : selected.tipo === 'gasto' ? (
+                    <>
+                      <View style={s.modalRow}>
+                        <Text style={s.modalLabel}>Monto</Text>
+                        <Text style={[s.modalValue, {color:'#e65100',fontWeight:'800'}]}>{fmt(selected.monto)}</Text>
+                      </View>
+                      <View style={s.modalRow}>
+                        <Text style={s.modalLabel}>Tipo</Text>
+                        <Text style={s.modalValue}>{selected.tipoGasto === 'vehiculo' ? `🏍️ ${selected.clienteNombre}` : '🧾 Consumo'}</Text>
+                      </View>
+                      {selected.categoriaVehiculo && (
+                        <View style={s.modalRow}>
+                          <Text style={s.modalLabel}>Categoría</Text>
+                          <Text style={s.modalValue}>{selected.categoriaVehiculo}</Text>
+                        </View>
+                      )}
+                      <View style={s.modalRow}>
+                        <Text style={s.modalLabel}>Estado</Text>
+                        <Text style={[s.modalValue, { color: (ESTADO_GASTO[selected.estadoGasto]||{}).color || '#666', fontWeight: '800' }]}>
+                          {(ESTADO_GASTO[selected.estadoGasto]||{}).label || selected.estadoGasto}
+                        </Text>
+                      </View>
+                      {selected.observaciones && (
+                        <View style={s.modalRow}>
+                          <Text style={s.modalLabel}>Descripción</Text>
+                          <Text style={[s.modalValue, { flex: 1, textAlign: 'right' }]}>{selected.observaciones}</Text>
+                        </View>
+                      )}
                     </>
                   ) : (
                     <>
@@ -402,20 +490,22 @@ export default function HistorialDiaScreen({ navigation }) {
                 </View>
               </ScrollView>
               <View style={s.modalBtns}>
-                {selected.tipo !== 'visita' && (
+                {selected.tipo === 'pago' && (
                   <TouchableOpacity style={s.btnImprimir} onPress={() => { imprimir(selected); setSelected(null); }}>
                     <Text style={s.btnImprimirTxt}>🖨️  Reimprimir</Text>
                   </TouchableOpacity>
                 )}
-                <TouchableOpacity
-                  style={s.btnWhatsapp}
-                  onPress={() => {
-                    const msg = selected.tipo === 'visita' ? mensajeVisita(selected) : mensajeCobro(selected);
-                    abrirWhatsApp(selected.clienteWhatsapp, msg);
-                  }}
-                >
-                  <Text style={s.btnWhatsappTxt}>💬  Enviar por WhatsApp</Text>
-                </TouchableOpacity>
+                {selected.tipo !== 'gasto' && (
+                  <TouchableOpacity
+                    style={s.btnWhatsapp}
+                    onPress={() => {
+                      const msg = selected.tipo === 'visita' ? mensajeVisita(selected) : mensajeCobro(selected);
+                      abrirWhatsApp(selected.clienteWhatsapp, msg);
+                    }}
+                  >
+                    <Text style={s.btnWhatsappTxt}>💬  Enviar por WhatsApp</Text>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity style={s.btnSecondary} onPress={() => setSelected(null)}>
                   <Text style={s.btnSecondaryTxt}>Cerrar</Text>
                 </TouchableOpacity>
@@ -447,14 +537,14 @@ const s = StyleSheet.create({
   offlineBanner:{ backgroundColor: '#fff3cd', margin: 12, borderRadius: 10, padding: 10 },
   offlineTxt:   { color: '#856404', fontSize: 12, fontWeight: '600', textAlign: 'center' },
 
+  totalRow: { flexDirection: 'row', marginHorizontal: 12, marginTop: 12, gap: 8 },
   totalCard: {
-    backgroundColor: '#1565C0', marginHorizontal: 12, marginTop: 12,
-    borderRadius: 14, paddingVertical: 16, paddingHorizontal: 20,
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    flex: 1, backgroundColor: '#1565C0',
+    borderRadius: 14, paddingVertical: 14, paddingHorizontal: 16,
     opacity: 0.9,
   },
-  totalLabel: { color: '#fff', fontSize: 14, fontWeight: '600' },
-  totalValor: { color: '#fff', fontSize: 26, fontWeight: '900' },
+  totalLabel: { color: '#fff', fontSize: 12, fontWeight: '600' },
+  totalValor: { color: '#fff', fontSize: 20, fontWeight: '900', marginTop: 2 },
 
   card: {
     backgroundColor: '#fff', borderRadius: 14, marginBottom: 10,
