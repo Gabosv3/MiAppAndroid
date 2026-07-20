@@ -11,24 +11,28 @@ import { useConnectivity } from '../services/connectivity';
 import { leerHistorial } from '../services/cobrosOffline';
 import { fechaHoyLocal, fechaLocalDesdeISO } from '../services/dateUtils';
 
-// Normaliza la respuesta del servidor (snake_case) al mismo shape que usa
-// el historial local (camelCase), para que el resto de la pantalla no tenga
-// que distinguir de dónde vino cada registro.
-const normalizarItemServidor = (it) => ({
-  id: `srv-${it.tipo}-${it.cliente_id}-${it.fecha}`,
-  tipo: it.tipo === 'visita' ? 'visita' : 'pago',
-  clienteId: it.cliente_id,
-  clienteNombre: it.cliente_nombre,
-  clienteWhatsapp: it.cliente_whatsapp || null,
-  ventaNumero: it.venta_numero || null,
-  numeroRecibo: it.numero_recibo || null,
-  producto: it.producto || null,
-  monto: it.monto || 0,
-  metodo: it.metodo || null,
-  resultadoVisita: it.resultado_visita || null,
-  observaciones: it.observaciones || null,
-  fecha: it.fecha,
-  proximaVisita: it.proxima_visita || null,
+// Normaliza la respuesta real de GET /cobros/historial (solo pagos, sin
+// visitas) al mismo shape que usa el historial local, para que el resto de
+// la pantalla no tenga que distinguir de dónde vino cada registro.
+// Nota: este endpoint no devuelve numero_recibo ni numero_venta (solo se
+// entregan al momento del pago) — quedan null aquí, y la UI ya los omite
+// cuando faltan.
+const normalizarPagoServidor = (fechaDia) => (p) => ({
+  id: `srv-pago-${p.id}`,
+  tipo: 'pago',
+  clienteId: p.cliente?.id,
+  clienteNombre: p.cliente?.nombre,
+  clienteWhatsapp: p.cliente?.whatsapp || null,
+  ventaNumero: null,
+  numeroRecibo: null,
+  producto: (p.productos || []).map(x => x.nombre).join(', ') || null,
+  monto: p.monto || 0,
+  metodo: p.metodo_pago || null,
+  referencia: p.referencia || null,
+  resultadoVisita: null,
+  observaciones: null,
+  fecha: `${fechaDia}T${p.hora}:00`,
+  proximaVisita: null,
 });
 
 const fmt   = (n) => `$${Number(n || 0).toFixed(2)}`;
@@ -155,18 +159,28 @@ export default function HistorialDiaScreen({ navigation }) {
     (async () => {
       setLoading(true);
 
-      // Fuente principal: servidor (sobrevive logout, cambio de teléfono, etc.)
-      // La caché local solo se usa como respaldo cuando no hay conexión.
+      // Fuente principal para PAGOS: servidor (sobrevive logout, cambio de
+      // teléfono, etc.). El endpoint no devuelve visitas sin pago, así que
+      // esas se completan con la caché local del día — solo se pierden si
+      // el cobrador cierra sesión antes de que sincronicen a algún lado.
       if (isOnline) {
         try {
-          const { data } = await api.get('/cobros/historial/hoy');
-          const deServidor = (data.items || []).map(normalizarItemServidor);
-          setItems(deServidor);
+          const { data } = await api.get('/cobros/historial'); // sin ?fecha= = hoy
+          const pagosServidor = (data.pagos || []).map(normalizarPagoServidor(data.fecha));
+
+          const todosLocal = await leerHistorial();
+          const fechaHoy = hoy();
+          const visitasHoy = todosLocal.filter(h => h.tipo === 'visita' && fechaLocalDesdeISO(h.fecha) === fechaHoy);
+
+          const combinado = [...pagosServidor, ...visitasHoy]
+            .sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+
+          setItems(combinado);
           setEsCache(false);
           setLoading(false);
           return;
         } catch {
-          // Si falla la petición (ej. endpoint aún no desplegado), cae al local
+          // Si falla la petición (ej. endpoint caído), cae al local completo
         }
       }
 
