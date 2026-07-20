@@ -259,10 +259,9 @@ export default function DetalleClienteScreen({ navigation, route }) {
           </style>
         </head><body>
           <div class="c b" style="font-size:14px">DISTRIBUIDORA BM</div>
-          <div class="div"></div>
-          <div class="row"><span>Recibo:</span><span class="b">${numeroReciboGrupo}</span></div>
-          <div class="row"><span>Fecha:</span><span>${fecha}</span></div>
-          <div class="row"><span>Tel:</span><span>6047-9762</span></div>
+          <div class="c">6047-9762</div>
+          <div style="height:8px"></div>
+          <div class="row"><span class="b">${numeroReciboGrupo}</span><span>${fecha}</span></div>
           <div class="row"><span>Cobrador:</span><span>${nombreCobrador}</span></div>
           <div class="div"></div>
           <div class="b">Cuentas abonadas</div>

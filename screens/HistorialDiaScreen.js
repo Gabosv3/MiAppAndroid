@@ -123,10 +123,9 @@ const buildReciboHtml = ({ clienteNombre, clienteCodigo, ventaNumero, producto, 
     </style>
   </head><body>
     <div class="c b" style="font-size:14px">DISTRIBUIDORA BM</div>
-    <div class="div"></div>
-    <div class="row"><span>Recibo:</span><span class="b">${numeroRecibo||'N/A'}</span></div>
-    <div class="row"><span>Fecha:</span><span>${fechaFmt}</span></div>
-    <div class="row"><span>Tel:</span><span>6047-9762</span></div>
+    <div class="c">6047-9762</div>
+    <div style="height:8px"></div>
+    <div class="row"><span class="b">${numeroRecibo||'N/A'}</span><span>${fechaFmt}</span></div>
     <div class="div"></div>
     <div><span class="b">${clienteNombre}</span>${clienteCodigo ? ` (${clienteCodigo})` : ''}</div>
     ${producto ? `<div>${producto}</div>` : ''}
