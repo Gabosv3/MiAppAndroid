@@ -6,7 +6,7 @@ import * as Sharing from 'expo-sharing';
 
 const fmt = (n) => `$${Number(n||0).toFixed(2)}`;
 
-const buildHtmlRecibo = ({ clienteNombre, ventaNumero, producto, numeroRecibo, montoTotal, metodoPago, proximaVisita, saldoAntes, saldoDespues, nombreCobrador }) => {
+const buildHtmlRecibo = ({ clienteNombre, codigoCliente, ventaNumero, producto, numeroRecibo, montoTotal, metodoPago, proximaVisita, saldoAntes, saldoDespues, nombreCobrador }) => {
   const fecha   = new Date().toLocaleDateString('es-SV');
   const proxFmt = proximaVisita
     ? new Date(proximaVisita + 'T12:00:00').toLocaleDateString('es-SV', { day:'2-digit', month:'long', year:'numeric' })
@@ -36,6 +36,7 @@ const buildHtmlRecibo = ({ clienteNombre, ventaNumero, producto, numeroRecibo, m
     <div class="row"><span class="lbl"><b>Recibo:</b></span><span class="val">${numeroRecibo||'N/A'}</span></div>
     <div class="row"><span class="lbl"><b>Fecha:</b></span><span class="val">${fecha}</span></div>
     <div class="row"><span class="lbl"><b>Cliente:</b></span><span class="val">${clienteNombre}</span></div>
+    ${codigoCliente ? `<div class="row"><span class="lbl"><b>Código:</b></span><span class="val">${codigoCliente}</span></div>` : ''}
     <div class="row"><span class="lbl"><b>Venta:</b></span><span class="val">${ventaNumero||'N/A'}</span></div>
     ${producto ? `<div class="row"><span class="lbl"><b>Producto:</b></span><span class="val">${producto}</span></div>` : ''}
     <div class="row"><span class="lbl"><b>Cobrador:</b></span><span class="val">${nombreCobrador}</span></div>
@@ -90,7 +91,7 @@ const imprimirRecibo = async (params) => {
   }
 };
 
-const enviarWhatsApp = async ({ clienteNombre, clienteWhatsapp, montoTotal, metodoPago, ventaNumero, producto, numeroRecibo, proximaVisita, saldoAntes, saldoDespues, nombreCobrador }) => {
+const enviarWhatsApp = async ({ clienteNombre, codigoCliente, clienteWhatsapp, montoTotal, metodoPago, ventaNumero, producto, numeroRecibo, proximaVisita, saldoAntes, saldoDespues, nombreCobrador }) => {
   const fecha   = new Date().toLocaleDateString('es-SV');
   const proxFmt = proximaVisita
     ? new Date(proximaVisita + 'T12:00:00').toLocaleDateString('es-SV', { day:'2-digit', month:'long', year:'numeric' })
@@ -102,7 +103,7 @@ const enviarWhatsApp = async ({ clienteNombre, clienteWhatsapp, montoTotal, meto
 ━━━━━━━━━━━━━━━━━━━━
 🧾 Recibo: ${numeroRecibo || 'N/A'}
 📅 Fecha: ${fecha}
-👤 Cliente: ${clienteNombre}
+👤 Cliente: ${clienteNombre}${codigoCliente ? ` (Código: ${codigoCliente})` : ''}
 🔖 Venta: ${ventaNumero || 'N/A'}${producto ? `\n📦 Producto: ${producto}` : ''}
 💳 Método: ${metodoPago}
 👷 Cobrador: ${nombreCobrador}
@@ -133,7 +134,7 @@ _Por favor confirme respondiendo *SÍ* si este recibo corresponde a su pago. En 
 
 export default function PagoRegistradoScreen({ navigation, route }) {
   const {
-    resultado, clienteId, clienteNombre, clienteWhatsapp,
+    resultado, clienteId, clienteNombre, codigoCliente, clienteWhatsapp,
     montoTotal, metodoPago, ventaNumero, producto, numeroRecibo, proximaVisita,
     saldoAntes, saldoDespues, nombreCobrador,
     autoImprimir, isOffline,
@@ -142,7 +143,7 @@ export default function PagoRegistradoScreen({ navigation, route }) {
   // Abrir share sheet cuando la pantalla esté completamente visible
   useFocusEffect(useCallback(() => {
     if (autoImprimir) {
-      imprimirRecibo({ clienteNombre, ventaNumero, producto, numeroRecibo, montoTotal, metodoPago, proximaVisita, saldoAntes, saldoDespues, nombreCobrador });
+      imprimirRecibo({ clienteNombre, codigoCliente, ventaNumero, producto, numeroRecibo, montoTotal, metodoPago, proximaVisita, saldoAntes, saldoDespues, nombreCobrador });
     }
   }, [autoImprimir]));
 
@@ -215,14 +216,14 @@ export default function PagoRegistradoScreen({ navigation, route }) {
           {!isOffline && clienteWhatsapp ? (
             <TouchableOpacity
               style={s.btnWhatsapp}
-              onPress={() => enviarWhatsApp({ clienteNombre, clienteWhatsapp, montoTotal, metodoPago, ventaNumero, producto, numeroRecibo, proximaVisita, saldoAntes, saldoDespues, nombreCobrador })}
+              onPress={() => enviarWhatsApp({ clienteNombre, codigoCliente, clienteWhatsapp, montoTotal, metodoPago, ventaNumero, producto, numeroRecibo, proximaVisita, saldoAntes, saldoDespues, nombreCobrador })}
             >
               <Text style={s.btnWhatsappTxt}>💬  Enviar recibo por WhatsApp</Text>
             </TouchableOpacity>
           ) : null}
           <TouchableOpacity
             style={s.btnImprimir}
-            onPress={() => imprimirRecibo({ clienteNombre, ventaNumero, producto, numeroRecibo, montoTotal, metodoPago, proximaVisita, saldoAntes, saldoDespues, nombreCobrador })}
+            onPress={() => imprimirRecibo({ clienteNombre, codigoCliente, ventaNumero, producto, numeroRecibo, montoTotal, metodoPago, proximaVisita, saldoAntes, saldoDespues, nombreCobrador })}
           >
             <Text style={s.btnImprimirTxt}>🖨️  {isOffline ? 'Vista previa' : 'Imprimir recibo'}</Text>
           </TouchableOpacity>

@@ -84,7 +84,7 @@ const METODOS = [
 ];
 
 export default function RegistrarPagoScreen({ navigation, route }) {
-  const { cliente, ventaId, ventaNumero, producto, saldoPendiente, cuotasVencidas } = route.params;
+  const { cliente, ventaId, ventaNumero, producto, codigoCliente, saldoPendiente, cuotasVencidas } = route.params;
   const { user } = useAuth();
   const nombreCobrador = user?.name || user?.full_name || user?.nombre || user?.usuario || 'Cobrador';
 
@@ -155,6 +155,7 @@ export default function RegistrarPagoScreen({ navigation, route }) {
           metodoPago: metodo,
           ventaNumero,
           producto,
+          codigoCliente,
           numeroRecibo,
           proximaVisita: proxVisita,
           saldoAntes,
@@ -179,6 +180,11 @@ export default function RegistrarPagoScreen({ navigation, route }) {
       // teléfono) — si por algún motivo no lo devuelve, se genera uno local
       // como respaldo para no dejar el recibo sin número.
       const numeroRecibo = data.numero_recibo || await generarNumeroRecibo(user?.id);
+      // Preferir lo que confirma el servidor al momento del pago sobre lo
+      // que ya traíamos por parámetro (mismo valor en la práctica, pero el
+      // servidor es la fuente de verdad).
+      const productoFinal = data.producto || producto;
+      const codigoFinal = data.cliente?.codigo_anterior || codigoCliente;
       const proxVisita = calcProximaVisita();
       const histItem = await guardarEnHistorial({
         clienteId: cliente.id, clienteNombre: cliente.nombre,
@@ -199,7 +205,8 @@ export default function RegistrarPagoScreen({ navigation, route }) {
         montoTotal: montoNum,
         metodoPago: metodo,
         ventaNumero,
-        producto,
+        producto: productoFinal,
+        codigoCliente: codigoFinal,
         numeroRecibo,
         proximaVisita: histItem.proximaVisita,
         saldoAntes,

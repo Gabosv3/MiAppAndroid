@@ -421,6 +421,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
                     <Text style={{fontSize:16}}>✏️</Text>
                   </TouchableOpacity>
                 </View>
+                {cliente?.codigo_anterior && <Text style={s.clienteInfo}>Código:    {cliente.codigo_anterior}</Text>}
                 {cliente?.dui       && <Text style={s.clienteInfo}>DUI:       {cliente.dui}</Text>}
                 {cliente?.telefono  && <Text style={s.clienteInfo}>Tel:       {cliente.telefono}</Text>}
                 {cliente?.direccion && <Text style={s.clienteInfo}>Dirección: {cliente.direccion}</Text>}
@@ -570,6 +571,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
                       ventaId: venta.id,
                       ventaNumero: venta.numero_venta,
                       producto: venta.producto || null,
+                      codigoCliente: cliente?.codigo_anterior || null,
                       saldoPendiente: venta.saldo_pendiente,
                       cuotasVencidas: venta.resumen?.vencidas||0,
                     })}

@@ -23,6 +23,7 @@ const normalizarItemServidor = (fechaDia) => (it) => {
     tipo: it.tipo,
     clienteId: it.cliente?.id,
     clienteNombre: it.cliente?.nombre,
+    clienteCodigo: it.cliente?.codigo_anterior || null,
     clienteWhatsapp: it.cliente?.whatsapp || null,
     fecha: `${fechaDia}T${it.hora}:00`,
   };
@@ -101,7 +102,7 @@ const VISITA_INFO = {
   abono_previo:  { label: 'Ya abonó mensualidad',icon: '✅', color: '#00695c', bg: '#e0f2f1' },
 };
 
-const buildReciboHtml = ({ clienteNombre, ventaNumero, producto, numeroRecibo, monto, metodo, proximaVisita, fecha }) => {
+const buildReciboHtml = ({ clienteNombre, clienteCodigo, ventaNumero, producto, numeroRecibo, monto, metodo, proximaVisita, fecha }) => {
   const fechaFmt = new Date(fecha).toLocaleDateString('es-SV');
   const horaFmt = new Date(fecha).toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit', hour12: true });
   const proxFmt = proximaVisita
@@ -132,6 +133,7 @@ const buildReciboHtml = ({ clienteNombre, ventaNumero, producto, numeroRecibo, m
     <div class="row"><span class="lbl"><b>Fecha:</b></span><span class="val">${fechaFmt}</span></div>
     <div class="row"><span class="lbl"><b>Hora:</b></span><span class="val">${horaFmt}</span></div>
     <div class="row"><span class="lbl"><b>Cliente:</b></span><span class="val">${clienteNombre}</span></div>
+    ${clienteCodigo ? `<div class="row"><span class="lbl"><b>Código:</b></span><span class="val">${clienteCodigo}</span></div>` : ''}
     ${ventaNumero ? `<div class="row"><span class="lbl"><b>Venta:</b></span><span class="val">${ventaNumero}</span></div>` : ''}
     ${producto ? `<div class="row"><span class="lbl"><b>Producto:</b></span><span class="val">${producto}</span></div>` : ''}
     <div class="row"><span class="lbl"><b>Método:</b></span><span class="val">${metodo}</span></div>
@@ -166,7 +168,7 @@ const mensajeCobro = (item) => {
 ━━━━━━━━━━━━━━━━━━━━
 🧾 Recibo: ${item.numeroRecibo || 'N/A'}
 📅 Fecha: ${fechaFmt}
-👤 Cliente: ${item.clienteNombre}
+👤 Cliente: ${item.clienteNombre}${item.clienteCodigo ? ` (Código: ${item.clienteCodigo})` : ''}
 🔖 Venta: ${item.ventaNumero || 'N/A'}${item.producto ? `\n📦 Producto: ${item.producto}` : ''}
 💳 Método: ${item.metodo}
 
@@ -418,7 +420,7 @@ export default function HistorialDiaScreen({ navigation }) {
                   {selected.tipo !== 'gasto' && (
                     <View style={s.modalRow}>
                       <Text style={s.modalLabel}>Cliente</Text>
-                      <Text style={s.modalValue}>{selected.clienteNombre}</Text>
+                      <Text style={s.modalValue}>{selected.clienteNombre}{selected.clienteCodigo ? ` (${selected.clienteCodigo})` : ''}</Text>
                     </View>
                   )}
 
