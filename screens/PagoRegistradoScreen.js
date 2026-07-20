@@ -17,7 +17,7 @@ const buildHtmlRecibo = ({ clienteNombre, codigoCliente, ventaNumero, producto, 
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <style>
       *{box-sizing:border-box;margin:0;padding:0}
-      body{font-family:Arial,Helvetica,sans-serif;width:260px;margin:0 auto;padding:6px 4px;font-size:12px;line-height:1.55;color:#111}
+      body{font-family:Arial,Helvetica,sans-serif;width:220px;margin:0 auto;padding:6px 4px;font-size:11px;line-height:1.5;color:#111}
       .c{text-align:center}
       .b{font-weight:700}
       .row{display:flex;justify-content:space-between;align-items:center}
