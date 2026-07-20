@@ -35,6 +35,7 @@ const buildHtmlRecibo = ({ clienteNombre, codigoCliente, ventaNumero, producto, 
     <div class="center" style="font-size:11px;font-weight:800;margin-bottom:6px">RECIBO DE COBRO</div>
     <div class="row"><span class="lbl"><b>Recibo:</b></span><span class="val">${numeroRecibo||'N/A'}</span></div>
     <div class="row"><span class="lbl"><b>Fecha:</b></span><span class="val">${fecha}</span></div>
+    <div class="row"><span class="lbl"><b>Teléfono:</b></span><span class="val">6047-9762</span></div>
     <div class="row"><span class="lbl"><b>Cliente:</b></span><span class="val">${clienteNombre}</span></div>
     ${codigoCliente ? `<div class="row"><span class="lbl"><b>Código:</b></span><span class="val">${codigoCliente}</span></div>` : ''}
     <div class="row"><span class="lbl"><b>Venta:</b></span><span class="val">${ventaNumero||'N/A'}</span></div>
@@ -103,6 +104,7 @@ const enviarWhatsApp = async ({ clienteNombre, codigoCliente, clienteWhatsapp, m
 ━━━━━━━━━━━━━━━━━━━━
 🧾 Recibo: ${numeroRecibo || 'N/A'}
 📅 Fecha: ${fecha}
+📞 Teléfono: 6047-9762
 👤 Cliente: ${clienteNombre}${codigoCliente ? ` (Código: ${codigoCliente})` : ''}
 🔖 Venta: ${ventaNumero || 'N/A'}${producto ? `\n📦 Producto: ${producto}` : ''}
 💳 Método: ${metodoPago}

@@ -131,6 +131,7 @@ const buildReciboHtml = ({ clienteNombre, clienteCodigo, ventaNumero, producto, 
     <div class="center" style="font-size:11px;font-weight:800;margin-bottom:6px">RECIBO DE COBRO</div>
     <div class="row"><span class="lbl"><b>Recibo:</b></span><span class="val">${numeroRecibo||'N/A'}</span></div>
     <div class="row"><span class="lbl"><b>Fecha:</b></span><span class="val">${fechaFmt}</span></div>
+    <div class="row"><span class="lbl"><b>Teléfono:</b></span><span class="val">6047-9762</span></div>
     <div class="row"><span class="lbl"><b>Hora:</b></span><span class="val">${horaFmt}</span></div>
     <div class="row"><span class="lbl"><b>Cliente:</b></span><span class="val">${clienteNombre}</span></div>
     ${clienteCodigo ? `<div class="row"><span class="lbl"><b>Código:</b></span><span class="val">${clienteCodigo}</span></div>` : ''}
@@ -168,6 +169,7 @@ const mensajeCobro = (item) => {
 ━━━━━━━━━━━━━━━━━━━━
 🧾 Recibo: ${item.numeroRecibo || 'N/A'}
 📅 Fecha: ${fechaFmt}
+📞 Teléfono: 6047-9762
 👤 Cliente: ${item.clienteNombre}${item.clienteCodigo ? ` (Código: ${item.clienteCodigo})` : ''}
 🔖 Venta: ${item.ventaNumero || 'N/A'}${item.producto ? `\n📦 Producto: ${item.producto}` : ''}
 💳 Método: ${item.metodo}

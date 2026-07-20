@@ -269,6 +269,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
           <div class="center" style="font-size:11px;font-weight:800;margin-bottom:6px">RECIBO DE ABONO GRUPAL</div>
           <div class="row"><span class="lbl"><b>Recibo:</b></span><span class="val">${numeroReciboGrupo}</span></div>
           <div class="row"><span class="lbl"><b>Fecha:</b></span><span class="val">${fecha}</span></div>
+          <div class="row"><span class="lbl"><b>Teléfono:</b></span><span class="val">6047-9762</span></div>
           <div class="row"><span class="lbl"><b>Cobrador:</b></span><span class="val">${nombreCobrador}</span></div>
           <hr class="divider"/>
           <div style="font-size:10px;font-weight:700;color:#888;margin-bottom:4px">CUENTAS ABONADAS</div>
