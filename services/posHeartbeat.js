@@ -23,7 +23,7 @@ import api from './api';
 const TASK_NAME   = 'SIDB_LOCATION_TASK';
 const INTERVAL_MS = 2 * 60 * 1000; // 2 min foreground
 const SERIAL_KEY  = '@sidb/device_serial';
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.0.2';
 
 // ── Serial de dispositivo ─────────────────────────────────────────────────────
 const getOrCreateSerial = async () => {
