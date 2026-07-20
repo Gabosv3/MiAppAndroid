@@ -1589,8 +1589,13 @@ export default function NuevaVentaScreen({ navigation }) {
               <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 10 }}>
                 El monto y las cuotas se toman automáticamente de los productos a crédito en el carrito.
               </Text>
+            </ScrollView>
 
-              <Text style={[s.pagareLabel, { color: colors.textMuted, marginTop: 16 }]}>Firma del cliente *</Text>
+            {/* Fuera del ScrollView a propósito: si el pad de firma queda dentro
+                de un contenedor con scroll, el gesto de arrastrar para firmar
+                se lo roba el scroll y no se puede dibujar nada. */}
+            <Text style={[s.pagareLabel, { color: colors.textMuted, marginTop: 4, paddingHorizontal: 20 }]}>Firma del cliente *</Text>
+            <View style={{ paddingHorizontal: 20 }}>
               <FirmaPad ref={firmaPadRef} onFirma={onFirmaCapturada} />
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
                 <TouchableOpacity
@@ -1608,7 +1613,7 @@ export default function NuevaVentaScreen({ navigation }) {
                   </Text>
                 </TouchableOpacity>
               </View>
-            </ScrollView>
+            </View>
 
             <View style={s.confirmButtons}>
               <TouchableOpacity style={[s.confirmBtn, s.confirmBtnCancel]} onPress={() => setPagareModalVisible(false)}>
