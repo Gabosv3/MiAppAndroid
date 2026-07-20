@@ -145,18 +145,22 @@ export const syncQueue = async () => {
       console.warn(`      Mensaje: ${errorMessage}`);
       console.warn(`      Status: ${errorStatus}`);
 
-      // Si NO hay respuesta del servidor = problema de red → detener
-      if (!error.response && (error.message?.includes('Timeout') || error.message?.includes('Sin conexión') || error.message?.includes('15s sin respuesta'))) {
-        console.log(`   🛑 DETENIENDO - Problema de conexión`);
+      // Sin respuesta (red caída) O el servidor respondió 5xx (caído
+      // momentáneamente, reiniciando) → NO es un error de datos, es
+      // transitorio. Detener y reintentar todo en el próximo sync, sin
+      // borrar nada de la cola — de lo contrario se pierde el pago/venta.
+      const statusNum = error.response?.status;
+      const esTransitorio = !error.response || (statusNum && statusNum >= 500);
+      if (esTransitorio) {
+        console.log(`   🛑 DETENIENDO - Problema de conexión o servidor caído (${errorStatus})`);
         break;
       }
 
-      // Si el servidor respondió con error (4xx/5xx) → es un error de datos
-      // Eliminar de la cola para que no bloquee los demás
-      if (error.response) {
-        console.log(`   ⚠️ Error del servidor (${errorStatus}), eliminando de cola para no bloquear`);
-        await removeRequest(item.id);
-      }
+      // Si el servidor respondió con error 4xx → sí es un error real de
+      // datos (validación, permisos, etc.). Eliminar de la cola para que
+      // no bloquee los demás — reintentarlo no lo va a arreglar.
+      console.log(`   ⚠️ Error del servidor (${errorStatus}), eliminando de cola para no bloquear`);
+      await removeRequest(item.id);
     }
   }
 

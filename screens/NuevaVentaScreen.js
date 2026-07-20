@@ -20,7 +20,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import api from '../services/api';
+import api, { esErrorTransitorio } from '../services/api';
 import * as localDb from '../services/localDb';
 import { guardarAsignacionCache, leerAsignacionCache } from '../services/localDb';
 import * as Print from 'expo-print';
@@ -257,7 +257,7 @@ export default function NuevaVentaScreen({ navigation }) {
       ccReset();
       Alert.alert('✅ Cliente creado', `${nombreCompleto} fue agregado y seleccionado.`);
     } catch(error) {
-      const isOffline = !error.response || error.message==='Sin conexión con el servidor' || error.message==='Tiempo de espera agotado';
+      const isOffline = esErrorTransitorio(error);
       if (isOffline) {
         await offlineQueue.enqueueRequest({ method:'POST', url:'/clientes', label:'Crear cliente', useFormData:true,
           data:{ nombre:ccNombre.trim(), apellido:ccApellido.trim(), dui:ccDui.trim(), telefono_normal:ccTelefono.trim(),
@@ -338,7 +338,7 @@ export default function NuevaVentaScreen({ navigation }) {
     api.get('/categorias')
       .then(({ data }) => setCategorias(data))
       .catch(async (error) => {
-        const isOffline = !error.response || error.message === 'Sin conexión con el servidor' || error.message === 'Tiempo de espera agotado';
+        const isOffline = esErrorTransitorio(error);
         if (isOffline) {
           const categoriasLocales = await localDb.getLocalCategories();
           if (Array.isArray(categoriasLocales) && categoriasLocales.length > 0) {
@@ -642,7 +642,7 @@ export default function NuevaVentaScreen({ navigation }) {
       });
     } catch (e) {
       const msg = e?.response?.data?.message || e?.message || String(e);
-      const isOffline = !e.response || msg === 'Sin conexión con el servidor' || msg === 'Tiempo de espera agotado';
+      const isOffline = esErrorTransitorio(e);
 
       if (msg.includes('No hay asignación') || e?.response?.status === 404) {
         setAsignMsg('No hay asignación activa para hoy');
@@ -680,7 +680,7 @@ export default function NuevaVentaScreen({ navigation }) {
       const { data } = await api.get(`/clientes?${qs}`);
       setClientes(Array.isArray(data) ? data : (data.data || []));
     } catch (error) {
-      const isOffline = !error.response || error.message === 'Sin conexión con el servidor' || error.message === 'Tiempo de espera agotado';
+      const isOffline = esErrorTransitorio(error);
       if (isOffline) {
         // Offline: buscar en la BD local filtrado por query
         const clientesLocales = await localDb.searchLocalClients(q);
@@ -916,7 +916,7 @@ export default function NuevaVentaScreen({ navigation }) {
       });
       
     } catch (e) {
-      const offlineError = !e.response || e.message === 'Sin conexión con el servidor' || e.message === 'Tiempo de espera agotado';
+      const offlineError = esErrorTransitorio(e);
       if (offlineError) {
         try {
           await offlineQueue.enqueueRequest({

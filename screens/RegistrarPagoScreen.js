@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Print from 'expo-print';
-import api from '../services/api';
+import api, { esErrorTransitorio } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import { encolarPago, guardarEnHistorial, marcarClienteVisitado, generarNumeroRecibo } from '../services/cobrosOffline';
 import { useAuth } from '../context/AuthContext';
@@ -214,7 +214,7 @@ export default function RegistrarPagoScreen({ navigation, route }) {
         nombreCobrador,
       });
     } catch(e) {
-      if (!e.response) {
+      if (esErrorTransitorio(e)) {
         Alert.alert(
           'Sin conexión',
           '¿Deseas guardar el cobro para enviarlo cuando recuperes la conexión?',

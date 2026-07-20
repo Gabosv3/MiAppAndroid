@@ -49,4 +49,17 @@ api.interceptors.response.use(
   }
 );
 
+// Un error se considera "transitorio" (equivalente a sin conexión, aunque el
+// teléfono sí tenga señal) cuando:
+//   - No hubo respuesta del servidor (red caída, timeout)
+//   - El servidor respondió pero con 5xx (caído momentáneamente, reiniciando,
+//     el proxy devolvió 502/503/504 mientras el backend no estaba listo)
+// En ambos casos NO es un error de datos del usuario — el request debe
+// guardarse/reintentarse, no descartarse ni mostrarse como error final.
+// Un 4xx (400, 403, 404, 422, etc.) sí es un error real de datos y no cae aquí.
+export const esErrorTransitorio = (error) => {
+  if (!error?.response) return true;
+  return error.response.status >= 500;
+};
+
 export default api;

@@ -249,12 +249,18 @@ export const sincronizarPagosPendientes = async (api) => {
       synced++;
       console.log(`✅ Cobro sincronizado: ${pago.clienteNombre} $${pago.monto}`);
     } catch (e) {
-      // Error de red → detener, quedará en cola para próximo intento
-      if (!e.response) {
-        console.log('🛑 Sin red, deteniendo sync de cobros');
+      // Sin red O el servidor respondió 5xx (caído momentáneamente) →
+      // transitorio, no es un error de datos. Detener y reintentar todo
+      // en el próximo sync — NO eliminar el cobro de la cola, o se pierde.
+      const statusNum = e.response?.status;
+      const esTransitorio = !e.response || (statusNum && statusNum >= 500);
+      if (esTransitorio) {
+        console.log(`🛑 Problema de conexión o servidor caído (${statusNum || 'sin respuesta'}), deteniendo sync de cobros`);
         break;
       }
-      // Error del servidor → registrar y eliminar para no bloquear
+      // Error 4xx del servidor (validación, permisos) → sí es un error
+      // real de datos, reintentarlo no lo va a arreglar. Eliminar de la
+      // cola para que no bloquee los demás cobros pendientes.
       console.warn(`⚠️ Error servidor en cobro ${pago.id}:`, e.message);
       errores.push({ id: pago.id, cliente: pago.clienteNombre, error: e.message });
       await eliminarPago(pago.id);

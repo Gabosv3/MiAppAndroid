@@ -7,7 +7,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
-import api from '../services/api';
+import api, { esErrorTransitorio } from '../services/api';
 import * as offlineQueue from '../services/offlineQueue';
 import { useTheme } from '../context/ThemeContext';
 import { extractTextFromImage } from '../services/ocr';
@@ -263,7 +263,7 @@ export default function CrearClienteScreen({ navigation }) {
         errorMessage = error.response.data.message;
       }
 
-      const offlineError = !error.response || error.message === 'Sin conexión con el servidor' || error.message === 'Tiempo de espera agotado';
+      const offlineError = esErrorTransitorio(error);
       if (offlineError) {
         await offlineQueue.enqueueRequest({
           method: 'POST',
