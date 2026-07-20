@@ -57,29 +57,29 @@ export default function MisValesScreen({ navigation }) {
   const renderItem = ({ item }) => {
     const est = ESTADO_INFO[item.estado] || { label: item.estado, color: '#666', bg: '#f5f5f5' };
     return (
-      <TouchableOpacity style={s.card} onPress={() => setPreview(item)} activeOpacity={0.8}>
+      <TouchableOpacity style={s2.card} onPress={() => setPreview(item)} activeOpacity={0.8}>
         {item.comprobante_url ? (
-          <Image source={{ uri: urlComprobante(item.comprobante_url) }} style={s.thumb} />
+          <Image source={{ uri: urlComprobante(item.comprobante_url) }} style={s2.thumb} />
         ) : (
-          <View style={[s.thumb, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#f0f0f0' }]}>
+          <View style={[s2.thumb, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#f0f0f0' }]}>
             <Text style={{ fontSize: 20 }}>🧾</Text>
           </View>
         )}
-        <View style={s.cardBody}>
-          <View style={s.cardRow}>
-            <Text style={s.cardTipo}>
+        <View style={s2.cardBody}>
+          <View style={s2.cardRow}>
+            <Text style={s2.cardTipo}>
               {item.tipo === 'vehiculo' ? `🏍️ ${item.vehiculo || ''} · ${item.categoria_vehiculo || ''}` : '🧾 Consumo'}
             </Text>
-            <Text style={s.cardMonto}>{fmt(item.monto)}</Text>
+            <Text style={s2.cardMonto}>{fmt(item.monto)}</Text>
           </View>
-          <View style={s.cardRow}>
-            <Text style={s.cardFecha}>{item.creado}</Text>
-            <View style={[s.badge, { backgroundColor: est.bg }]}>
-              <Text style={[s.badgeTxt, { color: est.color }]}>{est.label}</Text>
+          <View style={s2.cardRow}>
+            <Text style={s2.cardFecha}>{item.creado}</Text>
+            <View style={[s2.badge, { backgroundColor: est.bg }]}>
+              <Text style={[s2.badgeTxt, { color: est.color }]}>{est.label}</Text>
             </View>
           </View>
           {item.estado === 'rechazado' && item.observaciones_admin ? (
-            <Text style={s.motivoRechazo} numberOfLines={2}>Motivo: {item.observaciones_admin}</Text>
+            <Text style={s2.motivoRechazo} numberOfLines={2}>Motivo: {item.observaciones_admin}</Text>
           ) : null}
         </View>
       </TouchableOpacity>
