@@ -239,10 +239,9 @@ export default function DetalleClienteScreen({ navigation, route }) {
     try {
       const numeroReciboGrupo = await generarNumeroRecibo(user?.id);
       const fecha = fmtFechaCorta(new Date());
-      const LINEA = '--------------------------------';
       const filasHtml = aplicados.map(a => `
         <div class="row"><span>${a.ok ? '✔' : '✘'} ${a.clienteNombre}${a.producto ? ` - ${a.producto}` : ''}</span><span>${a.ok ? fmt(a.monto) : 'ERROR'}</span></div>
-        ${a.ok && a.numeroRecibo ? `<div style="font-size:9px;color:#666">  ${a.numeroRecibo}</div>` : ''}
+        ${a.ok && a.numeroRecibo ? `<div style="font-size:10px;color:#666;padding-left:14px">${a.numeroRecibo}</div>` : ''}
       `).join('');
       const totalAplicado = aplicados.filter(a => a.ok).reduce((s, a) => s + a.monto, 0);
 
@@ -251,22 +250,27 @@ export default function DetalleClienteScreen({ navigation, route }) {
           <meta name="viewport" content="width=device-width,initial-scale=1"/>
           <style>
             *{box-sizing:border-box;margin:0;padding:0}
-            body{font-family:'Courier New',monospace;width:210px;margin:0 auto;padding:4px 3px;font-size:11px;line-height:1.4}
+            body{font-family:Arial,Helvetica,sans-serif;width:260px;margin:0 auto;padding:6px 4px;font-size:12px;line-height:1.55;color:#111}
             .c{text-align:center}
             .b{font-weight:700}
-            .row{display:flex;justify-content:space-between}
+            .row{display:flex;justify-content:space-between;align-items:center}
+            .div{border-top:1px solid #999;margin:5px 0}
+            .tot{font-size:14px}
           </style>
         </head><body>
-          <div class="c b">DISTRIBUIDORA BM</div>
-          <div class="row"><span>${numeroReciboGrupo}</span><span>${fecha}</span><span>6047-9762</span></div>
-          <div>${LINEA}</div>
-          <div>ABONO GRUPAL  COBR:${nombreCobrador}</div>
-          <div>${LINEA}</div>
+          <div class="c b" style="font-size:14px">DISTRIBUIDORA BM</div>
+          <div class="div"></div>
+          <div class="row"><span>Recibo:</span><span class="b">${numeroReciboGrupo}</span></div>
+          <div class="row"><span>Fecha:</span><span>${fecha}</span></div>
+          <div class="row"><span>Tel:</span><span>6047-9762</span></div>
+          <div class="row"><span>Cobrador:</span><span>${nombreCobrador}</span></div>
+          <div class="div"></div>
+          <div class="b">Cuentas abonadas</div>
           ${filasHtml}
-          <div>${LINEA}</div>
-          <div class="row"><span>TOTAL</span><span class="b">${fmt(totalAplicado)}</span></div>
-          ${restante > 0 ? `<div class="row"><span>SOBRANTE</span><span>${fmt(restante)}</span></div>` : ''}
-          <div>${LINEA}</div>
+          <div class="div"></div>
+          <div class="row tot"><span class="b">Total:</span><span class="b">${fmt(totalAplicado)}</span></div>
+          ${restante > 0 ? `<div class="row"><span>Sobrante:</span><span>${fmt(restante)}</span></div>` : ''}
+          <div class="div"></div>
           <div class="c">Gracias por su pago</div>
         </body></html>`;
 

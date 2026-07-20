@@ -114,23 +114,29 @@ const buildReciboHtml = ({ clienteNombre, clienteCodigo, ventaNumero, producto, 
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <style>
       *{box-sizing:border-box;margin:0;padding:0}
-      body{font-family:'Courier New',monospace;width:210px;margin:0 auto;padding:4px 3px;font-size:11px;line-height:1.4}
+      body{font-family:Arial,Helvetica,sans-serif;width:260px;margin:0 auto;padding:6px 4px;font-size:12px;line-height:1.55;color:#111}
       .c{text-align:center}
       .b{font-weight:700}
-      .row{display:flex;justify-content:space-between}
+      .row{display:flex;justify-content:space-between;align-items:center}
+      .div{border-top:1px solid #999;margin:5px 0}
+      .tot{font-size:14px}
     </style>
   </head><body>
-    <div class="c b">DISTRIBUIDORA BM</div>
-    <div class="row"><span>${numeroRecibo||'N/A'}</span><span>${fechaFmt}</span><span>6047-9762</span></div>
-    <div>--------------------------------</div>
-    <div>${clienteNombre}${clienteCodigo ? `  (${clienteCodigo})` : ''}</div>
+    <div class="c b" style="font-size:14px">DISTRIBUIDORA BM</div>
+    <div class="div"></div>
+    <div class="row"><span>Recibo:</span><span class="b">${numeroRecibo||'N/A'}</span></div>
+    <div class="row"><span>Fecha:</span><span>${fechaFmt}</span></div>
+    <div class="row"><span>Tel:</span><span>6047-9762</span></div>
+    <div class="div"></div>
+    <div><span class="b">${clienteNombre}</span>${clienteCodigo ? ` (${clienteCodigo})` : ''}</div>
     ${producto ? `<div>${producto}</div>` : ''}
-    <div>VTA:${ventaNumero||'N/A'}  COBR:${nombreCobrador||''}</div>
-    <div>PAGO: ${metodo ? metodo.charAt(0).toUpperCase()+metodo.slice(1) : ''}</div>
-    <div>--------------------------------</div>
-    <div class="row"><span>ABONO</span><span class="b">$${Number(monto).toFixed(2)}</span></div>
-    <div>--------------------------------</div>
-    ${proxFmt ? `<div>PROX: ${proxFmt}</div>` : ''}
+    <div class="row"><span>Venta:</span><span>${ventaNumero||'N/A'}</span></div>
+    <div class="row"><span>Cobrador:</span><span>${nombreCobrador||''}</span></div>
+    <div class="row"><span>Pago:</span><span>${metodo ? metodo.charAt(0).toUpperCase()+metodo.slice(1) : ''}</span></div>
+    <div class="div"></div>
+    <div class="row tot"><span class="b">Abona:</span><span class="b">$${Number(monto).toFixed(2)}</span></div>
+    <div class="div"></div>
+    ${proxFmt ? `<div class="row"><span>Próx. visita:</span><span>${proxFmt}</span></div><div class="div"></div>` : ''}
     <div class="c">Gracias por su pago</div>
   </body></html>`;
 };
