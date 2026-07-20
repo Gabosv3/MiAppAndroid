@@ -33,6 +33,7 @@ import { useConnectivity } from '../services/connectivity';
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
 import { extractTextFromImage } from '../services/ocr';
+import { fmtFechaCorta } from '../services/dateUtils';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -102,6 +103,116 @@ export default function NuevaVentaScreen({ navigation }) {
   const [printerModalVisible, setPrinterModalVisible] = useState(false);
   const [printerAddr, setPrinterAddr] = useState('');
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
+
+  // ── Pagaré (crédito) ─────────────────────────────────────────────────────────
+  // Se genera ANTES de confirmar la venta — el cliente firma en papel antes
+  // de llevarse el producto. Es solo una herramienta de apoyo: imprime/comparte
+  // el PDF y no bloquea ni cambia el flujo de "Finalizar venta".
+  const [pagareModalVisible, setPagareModalVisible] = useState(false);
+  const [pagareNombreDeudor, setPagareNombreDeudor] = useState('');
+  const [pagareDui, setPagareDui] = useState('');
+  const [pagareDireccion, setPagareDireccion] = useState('');
+  const [pagareLugar, setPagareLugar] = useState('Usulután');
+  const [pagareFechaVenc, setPagareFechaVenc] = useState('');
+  const [generandoPagare, setGenerandoPagare] = useState(false);
+
+  const abrirPagare = () => {
+    setPagareNombreDeudor(cliente?.id ? cliente.nombre : '');
+    setPagareDui('');
+    setPagareDireccion('');
+    setPagareLugar('Usulután');
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    setPagareFechaVenc(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
+    setPagareModalVisible(true);
+  };
+
+  const generarPagare = async () => {
+    if (!pagareNombreDeudor.trim() || !pagareDui.trim()) {
+      Alert.alert('Faltan datos', 'Ingresa al menos el nombre y el DUI del deudor.');
+      return;
+    }
+    setGenerandoPagare(true);
+    try {
+      const itemsCredito = carrito.filter(i => Number(i.cuotas) > 0);
+      const montoFinanciado = itemsCredito.reduce((s, i) => s + parseFloat(i.precio_venta || 0) * Number(i.cantidad || 1), 0);
+      const primaAplicada = usarPrima ? (parseFloat(pago) || 0) : 0;
+      const saldoAFinanciar = Math.max(0, montoFinanciado - primaAplicada);
+
+      const productosHtml = itemsCredito.map(i => `
+        <tr>
+          <td>${i.nombre} (x${i.cantidad})</td>
+          <td style="text-align:right">${i.cuotas} cuotas de ${fmt(i.precio_cuota)}</td>
+        </tr>
+      `).join('');
+
+      const fechaHoy = fmtFechaCorta(new Date());
+      const fechaVencFmt = pagareFechaVenc ? fmtFechaCorta(pagareFechaVenc) : '';
+
+      const html = `
+        <html><head>
+          <meta name="viewport" content="width=device-width,initial-scale=1"/>
+          <style>
+            *{box-sizing:border-box}
+            body{font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.7;color:#111;padding:32px;max-width:700px;margin:0 auto}
+            h1{font-size:20px;text-align:center;margin-bottom:24px;letter-spacing:1px}
+            table{width:100%;border-collapse:collapse;margin:16px 0}
+            td{padding:6px 4px;border-bottom:1px solid #ddd;font-size:13px}
+            .firma{margin-top:70px;display:flex;justify-content:space-between}
+            .firma div{width:45%;text-align:center;border-top:1px solid #333;padding-top:6px;font-size:12px}
+            .datos{margin:16px 0}
+            .datos b{display:inline-block;min-width:140px}
+          </style>
+        </head><body>
+          <h1>PAGARÉ</h1>
+
+          <p>Lugar y fecha: <b>${pagareLugar}, ${fechaHoy}</b></p>
+
+          <p style="margin-top:20px">
+            Yo, <b>${pagareNombreDeudor}</b>, portador del Documento Único de Identidad
+            número <b>${pagareDui}</b>, con domicilio en <b>${pagareDireccion || '_______________'}</b>,
+            debo y pagaré incondicionalmente a la orden de <b>DISTRIBUIDORA BM</b> la cantidad
+            de <b>${fmt(saldoAFinanciar)}</b> (${saldoAFinanciar.toFixed(2)} dólares de los Estados
+            Unidos de América), por concepto de la compra de los productos detallados a
+            continuación, obligándome a pagarla mediante cuotas mensuales según el plan
+            acordado, venciendo la primera cuota el día <b>${fechaVencFmt || '_______________'}</b>.
+          </p>
+
+          <table>
+            ${productosHtml}
+          </table>
+
+          ${primaAplicada > 0 ? `<p class="datos"><b>Prima inicial pagada:</b> ${fmt(primaAplicada)}</p>` : ''}
+          <p class="datos"><b>Saldo a financiar:</b> ${fmt(saldoAFinanciar)}</p>
+
+          <p style="margin-top:20px;font-size:12px;color:#555">
+            En caso de mora en el pago de dos o más cuotas consecutivas, la totalidad de
+            la deuda se dará por vencida y será exigible de inmediato, sin necesidad de
+            requerimiento previo.
+          </p>
+
+          <div class="firma">
+            <div>Firma del deudor<br/>DUI: ${pagareDui}</div>
+            <div>Distribuidora BM</div>
+          </div>
+        </body></html>`;
+
+      const { uri } = await Print.printToFileAsync({ html, base64: false });
+      try {
+        await Print.printAsync({ uri });
+      } catch {
+        const puedeCompartir = await Sharing.isAvailableAsync();
+        if (puedeCompartir) {
+          await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Pagaré', UTI: 'com.adobe.pdf' });
+        }
+      }
+      setPagareModalVisible(false);
+    } catch (e) {
+      Alert.alert('Error', 'No se pudo generar el pagaré: ' + (e?.message || ''));
+    } finally {
+      setGenerandoPagare(false);
+    }
+  };
 
   // ── Crear Cliente integrado ─────────────────────────────────────────────────
   const [crearClienteVisible, setCrearClienteVisible] = useState(false);
@@ -1360,6 +1471,18 @@ export default function NuevaVentaScreen({ navigation }) {
             )}
           </View>
 
+          {/* Generar pagaré — solo para ventas a crédito, antes de confirmar */}
+          {(cartTotals.tipoPago === 'credito' || cartTotals.esMixto) && (
+            <TouchableOpacity
+              style={s.pagareBtn}
+              onPress={abrirPagare}
+              activeOpacity={0.85}
+              disabled={carrito.length === 0}
+            >
+              <Text style={s.pagareBtnTxt}>📝 Generar pagaré</Text>
+            </TouchableOpacity>
+          )}
+
           {/* Botón finalizar */}
           <TouchableOpacity
             style={[s.finalizarBtn, (submitting || printing) && { opacity: 0.7 }]}
@@ -1375,6 +1498,77 @@ export default function NuevaVentaScreen({ navigation }) {
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* Modal generar pagaré */}
+      <Modal visible={pagareModalVisible} animationType="slide" transparent onRequestClose={() => setPagareModalVisible(false)}>
+        <View style={s.confirmModalOverlay}>
+          <View style={[s.confirmModal, { backgroundColor: colors.surface }]}>
+            <Text style={[s.confirmTitle, { color: colors.text }]}>📝 Generar Pagaré</Text>
+            <ScrollView style={s.confirmContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <Text style={[s.pagareLabel, { color: colors.textMuted }]}>Nombre completo del deudor *</Text>
+              <TextInput
+                style={[s.pagareInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.bg }]}
+                value={pagareNombreDeudor}
+                onChangeText={setPagareNombreDeudor}
+                placeholder="Ej: Juan Carlos Pérez"
+                placeholderTextColor={colors.textMuted}
+              />
+
+              <Text style={[s.pagareLabel, { color: colors.textMuted }]}>DUI *</Text>
+              <TextInput
+                style={[s.pagareInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.bg }]}
+                value={pagareDui}
+                onChangeText={setPagareDui}
+                placeholder="12345678-9"
+                placeholderTextColor={colors.textMuted}
+              />
+
+              <Text style={[s.pagareLabel, { color: colors.textMuted }]}>Dirección</Text>
+              <TextInput
+                style={[s.pagareInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.bg }]}
+                value={pagareDireccion}
+                onChangeText={setPagareDireccion}
+                placeholder="Dirección del deudor"
+                placeholderTextColor={colors.textMuted}
+              />
+
+              <Text style={[s.pagareLabel, { color: colors.textMuted }]}>Lugar de firma</Text>
+              <TextInput
+                style={[s.pagareInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.bg }]}
+                value={pagareLugar}
+                onChangeText={setPagareLugar}
+                placeholderTextColor={colors.textMuted}
+              />
+
+              <Text style={[s.pagareLabel, { color: colors.textMuted }]}>Fecha de la primera cuota (YYYY-MM-DD)</Text>
+              <TextInput
+                style={[s.pagareInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.bg }]}
+                value={pagareFechaVenc}
+                onChangeText={setPagareFechaVenc}
+                placeholder="2026-08-20"
+                placeholderTextColor={colors.textMuted}
+              />
+
+              <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 10 }}>
+                El monto y las cuotas se toman automáticamente de los productos a crédito en el carrito.
+              </Text>
+            </ScrollView>
+
+            <View style={s.confirmButtons}>
+              <TouchableOpacity style={[s.confirmBtn, s.confirmBtnCancel]} onPress={() => setPagareModalVisible(false)}>
+                <Text style={{ color: colors.text, fontWeight: '600' }}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.confirmBtn, s.confirmBtnConfirm, { backgroundColor: colors.accent }, generandoPagare && { opacity: 0.7 }]}
+                onPress={generarPagare}
+                disabled={generandoPagare}
+              >
+                {generandoPagare ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontWeight: '700' }}>Generar PDF</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Modal configuración impresora */}
       <Modal visible={printerModalVisible} animationType="slide" transparent>
@@ -1785,6 +1979,14 @@ const styles = (c) => StyleSheet.create({
     shadowOpacity: 0.4, shadowRadius: 6, elevation: 4,
   },
   finalizarTxt: { color: '#fff', fontSize: 13, fontWeight: '800', letterSpacing: 0.5 },
+
+  pagareBtn: {
+    borderWidth: 1.5, borderColor: c.accent, borderRadius: 10, paddingVertical: 9,
+    alignItems: 'center', marginTop: 8, marginBottom: 2,
+  },
+  pagareBtnTxt: { color: c.accent, fontSize: 13, fontWeight: '700' },
+  pagareLabel: { fontSize: 12, fontWeight: '600', marginTop: 12, marginBottom: 4 },
+  pagareInput: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9, fontSize: 14 },
 
   // Modales
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
