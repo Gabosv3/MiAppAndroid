@@ -15,6 +15,8 @@ import HistorialVentasScreen from '../screens/HistorialVentasScreen';
 import VentaRegistradaScreen from '../screens/VentaRegistradaScreen';
 import ReintegrosScreen from '../screens/ReintegrosScreen';
 import RegistrarVisitaScreen from '../screens/RegistrarVisitaScreen';
+import RegistrarGastoScreen from '../screens/RegistrarGastoScreen';
+import MisValesScreen from '../screens/MisValesScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -46,6 +48,8 @@ export default function AppNavigator() {
           <Stack.Screen name="VentaRegistrada"  component={VentaRegistradaScreen}   options={{ animation: 'fade' }} />
           <Stack.Screen name="Reintegros"       component={ReintegrosScreen}       options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="RegistrarVisita"  component={RegistrarVisitaScreen}  options={{ animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="RegistrarGasto"   component={RegistrarGastoScreen}   options={{ animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="MisVales"         component={MisValesScreen}         options={{ animation: 'slide_from_right' }} />
         </>
       ) : (
         <Stack.Screen name="Login" component={LoginScreen} />

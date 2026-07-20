@@ -360,18 +360,26 @@ export default function HistorialDiaScreen({ navigation }) {
         </View>
       ) : (<>
         {items.length > 0 && (
-          <View style={s.totalRow}>
-            <View style={s.totalCard}>
-              <Text style={s.totalLabel}>Cobrado hoy</Text>
-              <Text style={s.totalValor}>{fmt(totalCobrado)}</Text>
+          <>
+            <View style={s.totalRow}>
+              <View style={s.totalCard}>
+                <Text style={s.totalLabel}>Cobrado hoy</Text>
+                <Text style={s.totalValor}>{fmt(totalCobrado)}</Text>
+              </View>
+              {gastos.length > 0 && (
+                <View style={[s.totalCard, { backgroundColor: '#e65100' }]}>
+                  <Text style={s.totalLabel}>Gastado hoy</Text>
+                  <Text style={s.totalValor}>{fmt(totalGastado)}</Text>
+                </View>
+              )}
             </View>
             {gastos.length > 0 && (
-              <View style={[s.totalCard, { backgroundColor: '#e65100' }]}>
-                <Text style={s.totalLabel}>Gastado hoy</Text>
-                <Text style={s.totalValor}>{fmt(totalGastado)}</Text>
+              <View style={s.entregaCard}>
+                <Text style={s.entregaLabel}>💵 Efectivo a entregar</Text>
+                <Text style={s.entregaValor}>{fmt(totalCobrado - totalGastado)}</Text>
               </View>
             )}
-          </View>
+          </>
         )}
         <FlatList
           data={items}
@@ -545,6 +553,14 @@ const s = StyleSheet.create({
   },
   totalLabel: { color: '#fff', fontSize: 12, fontWeight: '600' },
   totalValor: { color: '#fff', fontSize: 20, fontWeight: '900', marginTop: 2 },
+
+  entregaCard: {
+    backgroundColor: '#2e7d32', marginHorizontal: 12, marginTop: 8,
+    borderRadius: 14, paddingVertical: 12, paddingHorizontal: 16,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+  },
+  entregaLabel: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  entregaValor: { color: '#fff', fontSize: 20, fontWeight: '900' },
 
   card: {
     backgroundColor: '#fff', borderRadius: 14, marginBottom: 10,

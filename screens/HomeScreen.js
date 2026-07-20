@@ -192,6 +192,26 @@ export default function HomeScreen({ navigation }) {
             <Text style={s.quickTitle}>Mapa de ruta</Text>
             <Text style={s.quickSub}>Ver clientes</Text>
           </TouchableOpacity>
+
+          <TouchableOpacity
+            style={s.quickCard}
+            onPress={() => navigation.navigate('RegistrarGasto')}
+            activeOpacity={0.85}
+          >
+            <Text style={s.quickIcon}>🧾</Text>
+            <Text style={s.quickTitle}>Registrar gasto</Text>
+            <Text style={s.quickSub}>Vale de consumo/vehículo</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={s.quickCard}
+            onPress={() => navigation.navigate('MisVales')}
+            activeOpacity={0.85}
+          >
+            <Text style={s.quickIcon}>📋</Text>
+            <Text style={s.quickTitle}>Mis vales</Text>
+            <Text style={s.quickSub}>Ver estado</Text>
+          </TouchableOpacity>
         </View>
 
         <View style={{ height: 32 }} />
@@ -287,9 +307,10 @@ const styles = (c) => StyleSheet.create({
   mainBtnLabel: { color: '#fff', fontSize: 16, fontWeight: '800', marginBottom: 2 },
   mainBtnDesc:  { color: 'rgba(255,255,255,0.75)', fontSize: 12 },
 
-  quickGrid: { flexDirection: 'row', gap: 12 },
+  quickGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   quickCard: {
-    flex: 1,
+    flexBasis: '47%',
+    flexGrow: 1,
     backgroundColor: c.surface,
     borderRadius: 16,
     padding: 16,
