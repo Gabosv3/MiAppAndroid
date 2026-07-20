@@ -75,9 +75,19 @@ const hora  = (iso) => {
     return new Date(iso).toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit', hour12: true });
   } catch { return ''; }
 };
+// Solo para fechas simples "YYYY-MM-DD" (ej. proximaVisita) — se les agrega
+// mediodía para evitar que la zona horaria las corra un día hacia atrás.
 const fmtFecha = (iso) => {
   try {
     return new Date(iso + 'T12:00:00').toLocaleDateString('es-SV', { day: '2-digit', month: 'short' });
+  } catch { return iso; }
+};
+
+// Para fechas-hora completas (ej. selected.fecha) — NO agregar 'T12:00:00',
+// ya traen su propia hora y concatenarlo de nuevo produce una fecha inválida.
+const fmtFechaHora = (iso) => {
+  try {
+    return new Date(iso).toLocaleDateString('es-SV', { day: '2-digit', month: 'short' });
   } catch { return iso; }
 };
 
@@ -487,7 +497,7 @@ export default function HistorialDiaScreen({ navigation }) {
 
                   <View style={s.modalRow}>
                     <Text style={s.modalLabel}>Fecha & Hora</Text>
-                    <Text style={s.modalValue}>{fmtFecha(selected.fecha)} {hora(selected.fecha)}</Text>
+                    <Text style={s.modalValue}>{fmtFechaHora(selected.fecha)} {hora(selected.fecha)}</Text>
                   </View>
                   {selected.proximaVisita && (
                     <View style={s.modalRow}>
