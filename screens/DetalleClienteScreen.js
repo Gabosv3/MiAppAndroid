@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
-import api from '../services/api';
+import api, { esErrorTransitorio } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import { guardarClienteCache, leerClienteCache, generarNumeroRecibo } from '../services/cobrosOffline';
 import * as offlineQueue from '../services/offlineQueue';
@@ -257,11 +257,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
       const lat = pos.coords.latitude;
       const lng = pos.coords.longitude;
 
-      if (isOnline) {
-        await api.patch(`/clientes/${clienteId}/ubicacion`, { latitud: lat, longitud: lng });
-        Alert.alert('✅ Ubicación actualizada', `Lat: ${lat.toFixed(5)}\nLon: ${lng.toFixed(5)}`);
-      } else {
-        // Sin red: encolar para sincronizar después
+      const guardarOffline = async () => {
         await offlineQueue.enqueueRequest({
           method: 'PATCH',
           url: `/clientes/${clienteId}/ubicacion`,
@@ -272,6 +268,18 @@ export default function DetalleClienteScreen({ navigation, route }) {
           '📍 Ubicación guardada',
           `Se enviará al servidor cuando recuperes la conexión.\n\nLat: ${lat.toFixed(5)}\nLon: ${lng.toFixed(5)}`
         );
+      };
+
+      if (isOnline) {
+        try {
+          await api.patch(`/clientes/${clienteId}/ubicacion`, { latitud: lat, longitud: lng });
+          Alert.alert('✅ Ubicación actualizada', `Lat: ${lat.toFixed(5)}\nLon: ${lng.toFixed(5)}`);
+        } catch (e) {
+          if (esErrorTransitorio(e)) await guardarOffline();
+          else throw e;
+        }
+      } else {
+        await guardarOffline();
       }
     } catch (e) {
       Alert.alert('Error', e?.message || 'No se pudo obtener la ubicación.');

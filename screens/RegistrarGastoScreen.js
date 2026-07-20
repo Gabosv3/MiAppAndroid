@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import api from '../services/api';
+import api, { esErrorTransitorio } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
 
@@ -94,39 +94,47 @@ export default function RegistrarGastoScreen({ navigation }) {
       ...(esVehiculo && { vehiculo_id: vehiculoId, categoria_vehiculo: categoriaVehiculo }),
     };
 
+    const guardarOffline = async () => {
+      await offlineQueue.enqueueRequest({
+        method: 'POST',
+        url: '/vales',
+        label: `Vale ${tipo === 'vehiculo' ? categoriaVehiculo : 'consumo'} $${montoNum.toFixed(2)}`,
+        useFormData: true,
+        data: { ...campos, comprobante },
+      });
+      Alert.alert(
+        '📴 Guardado sin conexión',
+        'El vale se enviará automáticamente cuando recuperes la señal.',
+        [{ text: 'OK', onPress: () => { limpiar(); navigation.goBack(); } }]
+      );
+    };
+
     try {
       if (isOnline) {
-        const formData = new FormData();
-        Object.entries(campos).forEach(([k, v]) => formData.append(k, String(v)));
-        formData.append('comprobante', { uri: comprobante.uri, name: comprobante.name, type: comprobante.type });
+        try {
+          const formData = new FormData();
+          Object.entries(campos).forEach(([k, v]) => formData.append(k, String(v)));
+          formData.append('comprobante', { uri: comprobante.uri, name: comprobante.name, type: comprobante.type });
 
-        await api.post('/vales', formData, { timeout: 30000, headers: { 'Content-Type': 'multipart/form-data' } });
-        Alert.alert('✅ Vale enviado', 'Queda pendiente de aprobación.', [{ text: 'OK', onPress: () => { limpiar(); navigation.goBack(); } }]);
+          await api.post('/vales', formData, { timeout: 30000, headers: { 'Content-Type': 'multipart/form-data' } });
+          Alert.alert('✅ Vale enviado', 'Queda pendiente de aprobación.', [{ text: 'OK', onPress: () => { limpiar(); navigation.goBack(); } }]);
+        } catch (e) {
+          if (e?.response?.status === 403) {
+            Alert.alert('Vehículo no disponible', e.response.data?.mensaje || 'Este vehículo ya no te pertenece ni está disponible como reserva.');
+            setVehiculoId(null);
+            cargarVehiculos();
+          } else if (e?.response?.status === 422) {
+            const errores = e.response.data?.errors;
+            const msg = errores ? Object.values(errores).flat().join('\n') : (e.response.data?.message || 'Datos inválidos.');
+            Alert.alert('Error de validación', msg);
+          } else if (esErrorTransitorio(e)) {
+            await guardarOffline();
+          } else {
+            Alert.alert('Error', e?.response?.data?.message || e?.message || 'No se pudo enviar el vale.');
+          }
+        }
       } else {
-        await offlineQueue.enqueueRequest({
-          method: 'POST',
-          url: '/vales',
-          label: `Vale ${tipo === 'vehiculo' ? categoriaVehiculo : 'consumo'} $${montoNum.toFixed(2)}`,
-          useFormData: true,
-          data: { ...campos, comprobante },
-        });
-        Alert.alert(
-          '📴 Guardado sin conexión',
-          'El vale se enviará automáticamente cuando recuperes la señal.',
-          [{ text: 'OK', onPress: () => { limpiar(); navigation.goBack(); } }]
-        );
-      }
-    } catch (e) {
-      if (e?.response?.status === 403) {
-        Alert.alert('Vehículo no disponible', e.response.data?.mensaje || 'Este vehículo ya no te pertenece ni está disponible como reserva.');
-        setVehiculoId(null);
-        cargarVehiculos();
-      } else if (e?.response?.status === 422) {
-        const errores = e.response.data?.errors;
-        const msg = errores ? Object.values(errores).flat().join('\n') : (e.response.data?.message || 'Datos inválidos.');
-        Alert.alert('Error de validación', msg);
-      } else {
-        Alert.alert('Error', e?.response?.data?.message || e?.message || 'No se pudo enviar el vale.');
+        await guardarOffline();
       }
     } finally {
       setSubmitting(false);

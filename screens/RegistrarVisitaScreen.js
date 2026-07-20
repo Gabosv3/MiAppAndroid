@@ -6,7 +6,7 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import api from '../services/api';
+import api, { esErrorTransitorio } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
 import { guardarEnHistorial, marcarClienteVisitado } from '../services/cobrosOffline';
@@ -115,79 +115,96 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
       }
     }
 
+    // Guarda la visita en la cola offline — usado tanto si ya sabíamos que
+    // no había conexión, como si el request online falló por un problema
+    // transitorio (red caída a mitad de camino, servidor 5xx). Sin este
+    // respaldo en el catch, una falla momentánea perdía la visita completa
+    // (incluida la foto ya tomada) y obligaba a rehacerla.
+    const guardarOffline = async () => {
+      await offlineQueue.enqueueRequest({
+        method: 'POST',
+        url: `/cobros/clientes/${cliente.id}/visita`,
+        label: `Visita ${cliente.nombre}`,
+        useFormData: !esSinEvidencia,
+        data: {
+          resultado,
+          ...(observaciones.trim() && { observaciones: observaciones.trim() }),
+          ...(resultado === 'promesa_pago' && { promesa_fecha: promesaFecha }),
+          ...(!esSinEvidencia && ubicacion && { latitud: String(ubicacion.lat), longitud: String(ubicacion.lng) }),
+          ...(!esSinEvidencia && foto && { foto_hogar: { uri: foto.uri, type: foto.type || 'image/jpeg', name: foto.name || 'foto_hogar.jpg' } }),
+        },
+      });
+      await guardarEnHistorial({
+        clienteId: cliente.id, clienteNombre: cliente.nombre,
+        clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
+        tipo: 'visita', resultadoVisita: resultado,
+        observaciones: observaciones.trim() || null,
+        resultado: { ok: true, mensaje: 'Visita pendiente de envío (offline)' },
+      });
+      await marcarClienteVisitado(cliente.id);
+      Alert.alert(
+        '📴 Guardado sin conexión',
+        'La visita (con foto) se enviará automáticamente cuando recuperes la señal.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
+    };
+
     setSubmitting(true);
     try {
       if (isOnline) {
-        let payload;
-        let headers = {};
+        try {
+          let payload;
+          let headers = {};
 
-        if (esSinEvidencia) {
-          // Sin foto — enviar como JSON normal
-          payload = {
-            resultado,
-            ...(observaciones.trim() && { observaciones: observaciones.trim() }),
-          };
-          headers = { 'Content-Type': 'application/json' };
-        } else {
-          // Con foto — multipart/form-data
-          const form = new FormData();
-          form.append('resultado', resultado);
-          if (observaciones.trim()) form.append('observaciones', observaciones.trim());
-          if (resultado === 'promesa_pago') form.append('promesa_fecha', promesaFecha);
-          if (ubicacion) {
-            form.append('latitud',  String(ubicacion.lat));
-            form.append('longitud', String(ubicacion.lng));
+          if (esSinEvidencia) {
+            // Sin foto — enviar como JSON normal
+            payload = {
+              resultado,
+              ...(observaciones.trim() && { observaciones: observaciones.trim() }),
+            };
+            headers = { 'Content-Type': 'application/json' };
+          } else {
+            // Con foto — multipart/form-data
+            const form = new FormData();
+            form.append('resultado', resultado);
+            if (observaciones.trim()) form.append('observaciones', observaciones.trim());
+            if (resultado === 'promesa_pago') form.append('promesa_fecha', promesaFecha);
+            if (ubicacion) {
+              form.append('latitud',  String(ubicacion.lat));
+              form.append('longitud', String(ubicacion.lng));
+            }
+            form.append('foto_hogar', {
+              uri: Platform.OS === 'ios' ? foto.uri.replace('file://', '') : foto.uri,
+              type: foto.type,
+              name: foto.name,
+            });
+            payload = form;
+            headers = { 'Content-Type': 'multipart/form-data' };
           }
-          form.append('foto_hogar', {
-            uri: Platform.OS === 'ios' ? foto.uri.replace('file://', '') : foto.uri,
-            type: foto.type,
-            name: foto.name,
-          });
-          payload = form;
-          headers = { 'Content-Type': 'multipart/form-data' };
-        }
 
-        const { data } = await api.post(`/cobros/clientes/${cliente.id}/visita`, payload, { headers });
-        await guardarEnHistorial({
-          clienteId: cliente.id, clienteNombre: cliente.nombre,
-          clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
-          tipo: 'visita', resultadoVisita: resultado,
-          observaciones: observaciones.trim() || null,
-          resultado: data,
-        });
-        await marcarClienteVisitado(cliente.id);
-        Alert.alert(
-          '✅ Visita registrada',
-          'La gestión quedó guardada correctamente.',
-          [{ text: 'OK', onPress: () => navigation.goBack() }]
-        );
+          const { data } = await api.post(`/cobros/clientes/${cliente.id}/visita`, payload, { headers });
+          await guardarEnHistorial({
+            clienteId: cliente.id, clienteNombre: cliente.nombre,
+            clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
+            tipo: 'visita', resultadoVisita: resultado,
+            observaciones: observaciones.trim() || null,
+            resultado: data,
+          });
+          await marcarClienteVisitado(cliente.id);
+          Alert.alert(
+            '✅ Visita registrada',
+            'La gestión quedó guardada correctamente.',
+            [{ text: 'OK', onPress: () => navigation.goBack() }]
+          );
+        } catch (e) {
+          if (esErrorTransitorio(e)) {
+            await guardarOffline();
+          } else {
+            Alert.alert('Error', e?.response?.data?.message || e?.message || 'No se pudo registrar la visita.');
+          }
+        }
       } else {
-        await offlineQueue.enqueueRequest({
-          method: 'POST',
-          url: `/cobros/clientes/${cliente.id}/visita`,
-          label: `Visita ${cliente.nombre}`,
-          useFormData: !esSinEvidencia,
-          data: {
-            resultado,
-            ...(observaciones.trim() && { observaciones: observaciones.trim() }),
-            ...(resultado === 'promesa_pago' && { promesa_fecha: promesaFecha }),
-            ...(!esSinEvidencia && ubicacion && { latitud: String(ubicacion.lat), longitud: String(ubicacion.lng) }),
-            ...(!esSinEvidencia && foto && { foto_hogar: { uri: foto.uri, type: foto.type || 'image/jpeg', name: foto.name || 'foto_hogar.jpg' } }),
-          },
-        });
-        await guardarEnHistorial({
-          clienteId: cliente.id, clienteNombre: cliente.nombre,
-          clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
-          tipo: 'visita', resultadoVisita: resultado,
-          observaciones: observaciones.trim() || null,
-          resultado: { ok: true, mensaje: 'Visita pendiente de envío (offline)' },
-        });
-        await marcarClienteVisitado(cliente.id);
-        Alert.alert(
-          '📴 Guardado sin conexión',
-          'La visita (con foto) se enviará automáticamente cuando recuperes la señal.',
-          [{ text: 'OK', onPress: () => navigation.goBack() }]
-        );
+        await guardarOffline();
       }
     } catch (e) {
       Alert.alert('Error', e?.response?.data?.message || e?.message || 'No se pudo registrar la visita.');
