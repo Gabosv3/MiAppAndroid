@@ -120,8 +120,16 @@ export default function NuevaVentaScreen({ navigation }) {
   const firmaPadRef = useRef(null);
 
   const abrirPagare = () => {
-    setPagareNombreDeudor(cliente?.id ? cliente.nombre : '');
-    setPagareDui('');
+    if (!cliente?.id) {
+      Alert.alert('Selecciona un cliente', 'El pagaré necesita un cliente registrado (no "Consumidor Final") con DUI en su ficha.');
+      return;
+    }
+    if (!cliente?.dui) {
+      Alert.alert('Falta el DUI', 'Este cliente no tiene DUI registrado. Actualízalo en su ficha antes de generar el pagaré.');
+      return;
+    }
+    setPagareNombreDeudor(cliente.nombre);
+    setPagareDui(cliente.dui);
     setPagareDireccion('');
     setPagareLugar('Usulután');
     setFirmaBase64(null);
@@ -383,7 +391,7 @@ export default function NuevaVentaScreen({ navigation }) {
       const { data } = await api.post('/clientes', formData, { timeout:30000, headers:{'Content-Type':'multipart/form-data'} });
 
       const nombreCompleto = `${data.nombre||ccNombre} ${data.apellido||ccApellido}`.trim();
-      setCliente({ id: data.id, nombre: nombreCompleto, whatsapp: data.telefono_whatsapp||data.telefono_normal||null });
+      setCliente({ id: data.id, nombre: nombreCompleto, whatsapp: data.telefono_whatsapp||data.telefono_normal||null, dui: data.dui||ccDui||null });
       setCrearClienteVisible(false);
       setShowClienteModal(false);
       setBusquedaCliente('');
@@ -397,7 +405,7 @@ export default function NuevaVentaScreen({ navigation }) {
             telefono_whatsapp:ccWhatsapp.trim(), latitud:ccLatitud.trim(), longitud:ccLongitud.trim(),
             ...(ccDuiFrente&&{dui_foto_frente:ccDuiFrente}), ...(ccDuiReverso&&{dui_foto_reverso:ccDuiReverso}), ...(ccFotoCasa&&{foto_casa:ccFotoCasa}) } });
         const nombreCompleto = `${ccNombre} ${ccApellido}`.trim();
-        setCliente({ id: null, nombre: nombreCompleto, whatsapp: ccWhatsapp||ccTelefono||null });
+        setCliente({ id: null, nombre: nombreCompleto, whatsapp: ccWhatsapp||ccTelefono||null, dui: ccDui||null });
         setCrearClienteVisible(false);
         setShowClienteModal(false);
         setBusquedaCliente('');
@@ -992,8 +1000,19 @@ export default function NuevaVentaScreen({ navigation }) {
       return;
     }
 
+    // Venta a crédito (o mixta) exige DUI del cliente en ficha — es lo que
+    // respalda el pagaré y la cobranza posterior.
+    if ((cartTotals.tipoPago === 'credito' || cartTotals.esMixto) && !cliente.dui) {
+      Alert.alert(
+        '⚠️ Falta el DUI del cliente',
+        'Este cliente no tiene DUI registrado. No se puede vender a crédito sin DUI — actualiza su ficha antes de continuar.',
+        [{ text: 'Seleccionar otro cliente', onPress: () => setShowClienteModal(true) }, { text: 'Cancelar', style: 'cancel' }]
+      );
+      return;
+    }
+
     setConfirmModalVisible(true);
-  }, [carrito.length, cliente.id]);
+  }, [carrito.length, cliente.id, cliente.dui, cartTotals.tipoPago, cartTotals.esMixto]);
 
   // ── Finalizar venta (enviar al servidor) ───────────────────────────────────
   const finalizarVenta = useCallback(async () => {
@@ -1536,14 +1555,10 @@ export default function NuevaVentaScreen({ navigation }) {
                 placeholderTextColor={colors.textMuted}
               />
 
-              <Text style={[s.pagareLabel, { color: colors.textMuted }]}>DUI *</Text>
-              <TextInput
-                style={[s.pagareInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.bg }]}
-                value={pagareDui}
-                onChangeText={setPagareDui}
-                placeholder="12345678-9"
-                placeholderTextColor={colors.textMuted}
-              />
+              <Text style={[s.pagareLabel, { color: colors.textMuted }]}>DUI (del cliente seleccionado)</Text>
+              <View style={[s.pagareInput, { backgroundColor: colors.surfaceAlt || colors.border, justifyContent: 'center' }]}>
+                <Text style={{ color: colors.text, fontSize: 14 }}>{pagareDui}</Text>
+              </View>
 
               <Text style={[s.pagareLabel, { color: colors.textMuted }]}>Dirección</Text>
               <TextInput
@@ -1759,7 +1774,7 @@ export default function NuevaVentaScreen({ navigation }) {
                   <TouchableOpacity
                     style={[s.clienteRow, { borderBottomColor: colors.border }]}
                     onPress={() => {
-                      setCliente({ id: item.id, nombre, whatsapp: item.whatsapp || item.telefono || null });
+                      setCliente({ id: item.id, nombre, whatsapp: item.whatsapp || item.telefono || null, dui: item.dui || null });
                       setShowClienteModal(false);
                       setBusquedaCliente('');
                     }}
