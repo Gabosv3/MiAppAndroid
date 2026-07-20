@@ -33,3 +33,14 @@ export const fechaLocalDesdeISO = (iso) => {
   if (!iso) return '';
   return fechaLocalDesde(iso);
 };
+
+// Fecha corta "DD/MM/YYYY" para recibos impresos — acepta Date, ISO completo,
+// o "YYYY-MM-DD". Siempre con ceros a la izquierda, sin depender del locale
+// del dispositivo (evita "20/7/2026" vs "20/07/2026" según el teléfono).
+export const fmtFechaCorta = (value) => {
+  if (!value) return '';
+  const iso = fechaLocalDesde(value);
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+};

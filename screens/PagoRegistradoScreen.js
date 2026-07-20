@@ -3,57 +3,41 @@ import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView, Linkin
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { fmtFechaCorta } from '../services/dateUtils';
 
 const fmt = (n) => `$${Number(n||0).toFixed(2)}`;
+const capitalizar = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+const LINEA = '--------------------------------';
 
+// Formato compacto — menos líneas y sin cajas con padding para gastar menos
+// papel en la térmica, sin perder ningún dato del recibo anterior.
 const buildHtmlRecibo = ({ clienteNombre, codigoCliente, ventaNumero, producto, numeroRecibo, montoTotal, metodoPago, proximaVisita, saldoAntes, saldoDespues, nombreCobrador }) => {
-  const fecha   = new Date().toLocaleDateString('es-SV');
-  const proxFmt = proximaVisita
-    ? new Date(proximaVisita + 'T12:00:00').toLocaleDateString('es-SV', { day:'2-digit', month:'long', year:'numeric' })
-    : '';
+  const fecha   = fmtFechaCorta(new Date());
+  const proxFmt = proximaVisita ? fmtFechaCorta(proximaVisita) : '';
   return `<html><head>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <style>
       *{box-sizing:border-box;margin:0;padding:0}
-      body{font-family:Arial,sans-serif;width:220px;margin:0 auto;padding:8px 6px;font-size:11px}
-      .center{text-align:center}
-      .divider{border:none;border-top:1px dashed #bbb;margin:6px 0}
-      .row{display:flex;justify-content:space-between;align-items:center;padding:3px 0}
-      .lbl{flex:1;color:#333}
-      .val{font-weight:700;text-align:right;white-space:nowrap;padding-left:6px}
-      .abono{background:#e8f5e9;border-radius:4px;padding:5px 6px;margin:3px 0}
-      .abono .lbl{color:#2e7d32;font-weight:800}
-      .abono .val{font-size:15px;font-weight:900;color:#1b5e20}
-      .sep{border:none;border-top:1px solid #eee;margin:1px 0}
+      body{font-family:'Courier New',monospace;width:210px;margin:0 auto;padding:4px 3px;font-size:11px;line-height:1.4}
+      .c{text-align:center}
+      .b{font-weight:700}
+      .row{display:flex;justify-content:space-between}
     </style>
   </head><body>
-    <div class="center" style="margin-bottom:6px">
-      <div style="font-size:14px;font-weight:900">DISTRIBUIDORA BM</div>
-      <div style="font-size:9px;color:#888">Muebles · Electrodomésticos</div>
-    </div>
-    <hr class="divider"/>
-    <div class="center" style="font-size:11px;font-weight:800;margin-bottom:6px">RECIBO DE COBRO</div>
-    <div class="row"><span class="lbl"><b>Recibo:</b></span><span class="val">${numeroRecibo||'N/A'}</span></div>
-    <div class="row"><span class="lbl"><b>Fecha:</b></span><span class="val">${fecha}</span></div>
-    <div class="row"><span class="lbl"><b>Teléfono:</b></span><span class="val">6047-9762</span></div>
-    <div class="row"><span class="lbl"><b>Cliente:</b></span><span class="val">${clienteNombre}</span></div>
-    ${codigoCliente ? `<div class="row"><span class="lbl"><b>Código:</b></span><span class="val">${codigoCliente}</span></div>` : ''}
-    <div class="row"><span class="lbl"><b>Venta:</b></span><span class="val">${ventaNumero||'N/A'}</span></div>
-    ${producto ? `<div class="row"><span class="lbl"><b>Producto:</b></span><span class="val">${producto}</span></div>` : ''}
-    <div class="row"><span class="lbl"><b>Cobrador:</b></span><span class="val">${nombreCobrador}</span></div>
-    <div class="row"><span class="lbl"><b>Método:</b></span><span class="val">${metodoPago}</span></div>
-    <hr class="divider"/>
-    <div class="row"><span class="lbl">Lo que debía:</span><span class="val" style="color:#c62828">${fmt(saldoAntes)}</span></div>
-    <hr class="sep"/>
-    <div class="row abono"><span class="lbl">Lo que abona:</span><span class="val">${fmt(montoTotal)}</span></div>
-    <hr class="sep"/>
-    <div class="row"><span class="lbl">Lo que resta:</span><span class="val" style="color:#e65100">${fmt(saldoDespues)}</span></div>
-    <hr class="divider"/>
-    ${proxFmt ? `<div class="center" style="margin:6px 0">
-      <div style="font-size:9px;color:#888">PROXIMA VISITA</div>
-      <div style="font-size:12px;font-weight:900;color:#1565C0">${proxFmt}</div>
-    </div><hr class="divider"/>` : ''}
-    <div class="center" style="font-weight:700;font-size:11px">Gracias por su pago!</div>
+    <div class="c b">DISTRIBUIDORA BM</div>
+    <div class="row"><span>${numeroRecibo||'N/A'}</span><span>${fecha}</span><span>6047-9762</span></div>
+    <div>${LINEA}</div>
+    <div>${clienteNombre}${codigoCliente ? `  (${codigoCliente})` : ''}</div>
+    ${producto ? `<div>${producto}</div>` : ''}
+    <div>VTA:${ventaNumero||'N/A'}  COBR:${nombreCobrador}</div>
+    <div>PAGO: ${capitalizar(metodoPago)}</div>
+    <div>${LINEA}</div>
+    <div class="row"><span>DEBE</span><span>${fmt(saldoAntes)}</span></div>
+    <div class="row"><span>ABONO</span><span class="b">${fmt(montoTotal)}</span></div>
+    <div class="row"><span>SALDO</span><span>${fmt(saldoDespues)}</span></div>
+    <div>${LINEA}</div>
+    ${proxFmt ? `<div>PROX: ${proxFmt}</div>` : ''}
+    <div class="c">Gracias por su pago</div>
   </body></html>`;
 };
 

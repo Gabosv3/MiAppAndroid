@@ -11,6 +11,7 @@ import { guardarClienteCache, leerClienteCache, generarNumeroRecibo, encolarPago
 import * as offlineQueue from '../services/offlineQueue';
 import * as Location from 'expo-location';
 import { useAuth } from '../context/AuthContext';
+import { fmtFechaCorta } from '../services/dateUtils';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 const initials = (name='') => name.trim().split(/\s+/).slice(0,2).map(w=>w[0]?.toUpperCase()||'').join('');
@@ -237,11 +238,11 @@ export default function DetalleClienteScreen({ navigation, route }) {
   const imprimirReciboGrupal = async ({ monto, restante, aplicados }) => {
     try {
       const numeroReciboGrupo = await generarNumeroRecibo(user?.id);
-      const fecha = new Date().toLocaleDateString('es-SV');
+      const fecha = fmtFechaCorta(new Date());
+      const LINEA = '--------------------------------';
       const filasHtml = aplicados.map(a => `
-        <div class="row"><span class="lbl">${a.ok ? '✅' : '❌'} ${a.clienteNombre}${a.producto ? ` — ${a.producto}` : ''}</span>
-          <span class="val">${a.ok ? fmt(a.monto) : 'ERROR'}</span></div>
-        ${a.ok && a.numeroRecibo ? `<div style="font-size:10px;color:#888;margin:-2px 0 4px">Recibo: ${a.numeroRecibo}</div>` : ''}
+        <div class="row"><span>${a.ok ? '✔' : '✘'} ${a.clienteNombre}${a.producto ? ` - ${a.producto}` : ''}</span><span>${a.ok ? fmt(a.monto) : 'ERROR'}</span></div>
+        ${a.ok && a.numeroRecibo ? `<div style="font-size:9px;color:#666">  ${a.numeroRecibo}</div>` : ''}
       `).join('');
       const totalAplicado = aplicados.filter(a => a.ok).reduce((s, a) => s + a.monto, 0);
 
@@ -250,35 +251,23 @@ export default function DetalleClienteScreen({ navigation, route }) {
           <meta name="viewport" content="width=device-width,initial-scale=1"/>
           <style>
             *{box-sizing:border-box;margin:0;padding:0}
-            body{font-family:Arial,sans-serif;width:220px;margin:0 auto;padding:8px 6px;font-size:11px}
-            .center{text-align:center}
-            .divider{border:none;border-top:1px dashed #bbb;margin:6px 0}
-            .row{display:flex;justify-content:space-between;align-items:center;padding:3px 0}
-            .lbl{flex:1;color:#333}
-            .val{font-weight:700;text-align:right;white-space:nowrap;padding-left:6px}
-            .total{background:#e8f5e9;border-radius:4px;padding:6px;margin-top:4px}
-            .total .lbl{color:#2e7d32;font-weight:800}
-            .total .val{font-size:15px;font-weight:900;color:#1b5e20}
+            body{font-family:'Courier New',monospace;width:210px;margin:0 auto;padding:4px 3px;font-size:11px;line-height:1.4}
+            .c{text-align:center}
+            .b{font-weight:700}
+            .row{display:flex;justify-content:space-between}
           </style>
         </head><body>
-          <div class="center" style="margin-bottom:6px">
-            <div style="font-size:14px;font-weight:900">DISTRIBUIDORA BM</div>
-            <div style="font-size:9px;color:#888">Muebles · Electrodomésticos</div>
-          </div>
-          <hr class="divider"/>
-          <div class="center" style="font-size:11px;font-weight:800;margin-bottom:6px">RECIBO DE ABONO GRUPAL</div>
-          <div class="row"><span class="lbl"><b>Recibo:</b></span><span class="val">${numeroReciboGrupo}</span></div>
-          <div class="row"><span class="lbl"><b>Fecha:</b></span><span class="val">${fecha}</span></div>
-          <div class="row"><span class="lbl"><b>Teléfono:</b></span><span class="val">6047-9762</span></div>
-          <div class="row"><span class="lbl"><b>Cobrador:</b></span><span class="val">${nombreCobrador}</span></div>
-          <hr class="divider"/>
-          <div style="font-size:10px;font-weight:700;color:#888;margin-bottom:4px">CUENTAS ABONADAS</div>
+          <div class="c b">DISTRIBUIDORA BM</div>
+          <div class="row"><span>${numeroReciboGrupo}</span><span>${fecha}</span><span>6047-9762</span></div>
+          <div>${LINEA}</div>
+          <div>ABONO GRUPAL  COBR:${nombreCobrador}</div>
+          <div>${LINEA}</div>
           ${filasHtml}
-          <hr class="divider"/>
-          <div class="row total"><span class="lbl">TOTAL ABONADO</span><span class="val">${fmt(totalAplicado)}</span></div>
-          ${restante > 0 ? `<div class="row" style="margin-top:4px"><span class="lbl" style="color:#e65100">Sobrante sin aplicar</span><span class="val" style="color:#e65100">${fmt(restante)}</span></div>` : ''}
-          <hr class="divider"/>
-          <div class="center" style="font-weight:700;font-size:11px">Gracias por su pago!</div>
+          <div>${LINEA}</div>
+          <div class="row"><span>TOTAL</span><span class="b">${fmt(totalAplicado)}</span></div>
+          ${restante > 0 ? `<div class="row"><span>SOBRANTE</span><span>${fmt(restante)}</span></div>` : ''}
+          <div>${LINEA}</div>
+          <div class="c">Gracias por su pago</div>
         </body></html>`;
 
       await Print.printAsync({ html });
