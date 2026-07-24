@@ -820,17 +820,23 @@ export default function NuevaVentaScreen({ navigation }) {
         setAsignMsg('No hay asignación activa para hoy');
         setProductos([]);
       } else if (isOffline) {
-        // Usar la última asignación guardada, aunque sea de un día anterior
-        // — es mejor respaldo de emergencia que dejar al vendedor sin nada
-        // si el día arranca con mala señal.
         const cache = await leerAsignacionCache();
-        if (cache) {
+        if (cache && cache.esDeHoy) {
           setProductos(cache.productos);
           setCategorias(cache.categorias || []);
           setAsignacionId(cache.asignacionId);
-          setAsignMsg(cache.esDeHoy
-            ? 'Sin conexión — mostrando asignación de hoy guardada'
-            : '⚠️ Sin conexión — mostrando asignación de un día anterior, puede no estar actualizada');
+          setAsignMsg('Sin conexión — mostrando asignación de hoy guardada');
+        } else if (cache && !cache.esDeHoy) {
+          // No se usa como sustituto de hoy — podría traer productos que ya
+          // no están asignados o faltar los de hoy. Se bloquea con aviso
+          // claro para que el vendedor verifique conexión antes de salir.
+          setProductos([]);
+          setAsignMsg('⚠️ No se pudo confirmar tu asignación de HOY.\nLo que tienes guardado es de un día anterior.\n\nConéctate a internet y verifica antes de salir a campo.');
+          Alert.alert(
+            '⚠️ Asignación desactualizada',
+            'No se pudo confirmar tu asignación de productos de hoy — los datos guardados son de un día anterior. Conéctate a internet y verifica antes de salir a campo.',
+            [{ text: 'Entendido' }]
+          );
         } else {
           setAsignMsg('Sin conexión y no hay ninguna asignación guardada.\nConéctate una vez para cargar la asignación del día.');
           setProductos([]);

@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, StatusBar,
-  RefreshControl, ActivityIndicator, TextInput, FlatList, Platform,
+  RefreshControl, ActivityIndicator, TextInput, FlatList, Platform, Alert,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import api from '../services/api';
@@ -26,7 +26,6 @@ export default function CobrosScreen({ navigation }) {
   const [query,    setQuery]    = useState('');
   const [rutaId,   setRutaId]   = useState(null);
   const [esCache,  setEsCache]  = useState(false);
-  const [cacheVieja, setCacheVieja] = useState(false); // caché de un día anterior (mala señal desde el inicio del día)
   const [pagosPend,setPagosPend]= useState(0);
   const [ordenIds, setOrdenIds] = useState([]);
   const [visitadosIds, setVisitadosIds] = useState([]);
@@ -37,6 +36,21 @@ export default function CobrosScreen({ navigation }) {
   const [buscandoGlobal, setBuscandoGlobal] = useState(false);
   const [resultadosGlobal, setResultadosGlobal] = useState(null); // null = sin buscar, [] = sin resultados
   const { isOnline } = useConnectivity();
+
+  // Hay una caché guardada, pero es de un día anterior — no se usa como
+  // sustituto de la ruta de hoy (podría traer clientes que ya no visita, o
+  // no traer clientes nuevos). En vez de eso, se bloquea con un mensaje
+  // claro para que el cobrador verifique su conexión ANTES de salir a
+  // campo, cuando todavía puede resolverlo fácil.
+  const avisarDatosDesactualizados = useCallback(() => {
+    setRutas([]);
+    setError('⚠️ No se pudo confirmar tu ruta de HOY.\nLo que tienes guardado es de un día anterior.\n\nConéctate a internet y verifica antes de salir a campo.');
+    Alert.alert(
+      '⚠️ Ruta desactualizada',
+      'No se pudo confirmar tu ruta de hoy — los datos guardados son de un día anterior. Conéctate a internet y verifica antes de salir a campo.',
+      [{ text: 'Entendido' }]
+    );
+  }, []);
 
   const cargar = useCallback(async () => {
     try {
@@ -56,23 +70,25 @@ export default function CobrosScreen({ navigation }) {
         }
       } else {
         const cache = await leerRutaCache();
-        if (cache) {
+        if (cache && cache.esDeHoy) {
           setDia(cache.data.dia || '');
           setRutas(cache.data.rutas || []);
           if ((cache.data.rutas||[]).length === 1) setRutaId(cache.data.rutas[0].id);
           setEsCache(true);
-          setCacheVieja(!cache.esDeHoy);
+        } else if (cache && !cache.esDeHoy) {
+          avisarDatosDesactualizados();
         } else {
           setError('Sin conexión y no hay datos guardados.\nConéctate para cargar tu ruta.');
         }
       }
     } catch (e) {
       const cache = await leerRutaCache();
-      if (cache) {
+      if (cache && cache.esDeHoy) {
         setDia(cache.data.dia || '');
         setRutas(cache.data.rutas || []);
         setEsCache(true);
-        setCacheVieja(!cache.esDeHoy);
+      } else if (cache && !cache.esDeHoy) {
+        avisarDatosDesactualizados();
       } else {
         setError(e?.message || 'Error');
       }
@@ -417,11 +433,9 @@ export default function CobrosScreen({ navigation }) {
 
       {/* Banner offline */}
       {!modoReorden && (!isOnline || esCache) && (
-        <View style={[s.offlineBanner, cacheVieja && { backgroundColor: '#ffe0b2' }]}>
+        <View style={s.offlineBanner}>
           <Text style={s.offlineTxt}>
-            {cacheVieja
-              ? '⚠️ Ruta guardada de un día anterior — puede no estar actualizada. Conéctate para refrescarla.'
-              : `${!isOnline ? '📴 Sin conexión' : '📦 Datos en caché'} — los cobros se guardarán y enviarán al reconectarte`}
+            {!isOnline ? '📴 Sin conexión' : '📦 Datos en caché'} — los cobros se guardarán y enviarán al reconectarte
           </Text>
         </View>
       )}
