@@ -226,7 +226,32 @@ export const leerClientesVisitadosHoy = async () => {
 
 // ─── SINCRONIZAR PAGOS ───────────────────────────────────────────────────────
 
+// Candado a nivel de módulo (no por pantalla) — CobrosScreen llama a esta
+// función cada vez que la pantalla recupera el foco (cargar()), lo cual pasa
+// muy seguido en un día normal (el cobrador entra y sale de cada cliente).
+// Con señal débil, una sincronización puede tardar varios segundos; si el
+// cobrador vuelve a esta pantalla antes de que termine, se disparaba OTRA
+// sincronización en paralelo que releía la misma cola (todavía no vaciada)
+// y reenviaba el mismo cobro al servidor — de ahí los cobros duplicados
+// hasta 3-4 veces. Un useRef no alcanza porque se resetea si la pantalla se
+// desmonta; esta bandera vive mientras la app esté corriendo, sin importar
+// qué pantalla o cuántas veces se vuelva a montar.
+let sincronizandoPagos = false;
+
 export const sincronizarPagosPendientes = async (api) => {
+  if (sincronizandoPagos) {
+    console.log('⏳ Ya hay una sincronización de cobros en curso — se omite esta llamada duplicada');
+    return { total: 0, synced: 0, errores: [], omitido: true };
+  }
+  sincronizandoPagos = true;
+  try {
+    return await _sincronizarPagosPendientesInterno(api);
+  } finally {
+    sincronizandoPagos = false;
+  }
+};
+
+const _sincronizarPagosPendientesInterno = async (api) => {
   const cola = await leerPagosPendientes();
   if (cola.length === 0) return { total: 0, synced: 0, errores: [] };
 

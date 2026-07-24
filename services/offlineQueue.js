@@ -79,7 +79,28 @@ const buildFormData = (payload = {}) => {
   return formData;
 };
 
+// Candado a nivel de módulo — mismo motivo que en cobrosOffline.js: un
+// useRef por pantalla no protege contra remounts (logout/login, navegación
+// que desmonta y remonta HomeScreen) ni contra otra pantalla llamando a esto
+// en paralelo. Sin este candado, dos sincronizaciones simultáneas pueden
+// releer la misma cola antes de que la primera termine de vaciarla y
+// reenviar el mismo request (venta, cliente, vale, visita) más de una vez.
+let sincronizandoCola = false;
+
 export const syncQueue = async () => {
+  if (sincronizandoCola) {
+    console.log('⏳ Ya hay una sincronización de cola en curso — se omite esta llamada duplicada');
+    return { total: 0, synced: 0, remaining: await getQueueCount(), details: [], omitido: true };
+  }
+  sincronizandoCola = true;
+  try {
+    return await _syncQueueInterno();
+  } finally {
+    sincronizandoCola = false;
+  }
+};
+
+const _syncQueueInterno = async () => {
   const queue = await getRawQueue();
   const total = queue.length;
   let synced = 0;
