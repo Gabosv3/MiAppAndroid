@@ -37,14 +37,18 @@ export const guardarRutaCache = async (data) => {
   await AsyncStorage.setItem(KEYS.ruta, JSON.stringify({ data, fecha: fechaHoy(), savedAt: Date.now() }));
 };
 
+// Antes esto descartaba la caché por completo si no era exactamente de hoy
+// (cache.fecha !== fechaHoy() → null). Eso dejaba al cobrador sin nada que
+// mostrar si el día arrancaba con mala señal, aunque existiera la ruta de
+// ayer — que casi siempre sigue siendo útil como respaldo de emergencia. En
+// vez de descartarla, se devuelve con `esDeHoy` para que la pantalla avise
+// que es una versión vieja, sin dejar al cobrador totalmente en blanco.
 export const leerRutaCache = async () => {
   const raw = await AsyncStorage.getItem(KEYS.ruta);
   if (!raw) return null;
   try {
     const cache = JSON.parse(raw);
-    // Solo válida si es de hoy
-    if (cache.fecha !== fechaHoy()) return null;
-    return cache;
+    return { ...cache, esDeHoy: cache.fecha === fechaHoy() };
   } catch { return null; }
 };
 

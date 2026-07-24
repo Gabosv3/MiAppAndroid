@@ -118,6 +118,10 @@ export default function NuevaVentaScreen({ navigation }) {
   const [generandoPagare, setGenerandoPagare] = useState(false);
   const [firmaBase64, setFirmaBase64] = useState(null);
   const firmaPadRef = useRef(null);
+  // Id que devuelve POST /pagares al guardarlo — se usa para enlazarlo con
+  // la venta cuando esta se confirme (el pagaré se firma ANTES de la venta,
+  // así que en ese momento todavía no hay venta_id).
+  const [pagareGuardadoId, setPagareGuardadoId] = useState(null);
 
   const abrirPagare = () => {
     if (!cliente?.id) {
@@ -133,6 +137,7 @@ export default function NuevaVentaScreen({ navigation }) {
     setPagareDireccion('');
     setPagareLugar('Usulután');
     setFirmaBase64(null);
+    setPagareGuardadoId(null);
     const d = new Date();
     d.setDate(d.getDate() + 30);
     setPagareFechaVenc(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
@@ -230,6 +235,32 @@ export default function NuevaVentaScreen({ navigation }) {
       // Documento 100% digital: se genera el PDF y se comparte/guarda
       // directamente, sin pasar por el diálogo de impresión física.
       const { uri } = await Print.printToFileAsync({ html, base64: false });
+
+      // Guardar el PDF ya firmado en el servidor — todavía no hay venta_id
+      // porque el pagaré se firma antes de confirmar la venta; se enlaza
+      // después en finalizarVenta() si la venta se confirma con éxito.
+      try {
+        const camposPagare = { cliente_id: String(cliente.id), monto_financiado: saldoAFinanciar.toFixed(2) };
+        if (isOnline) {
+          const formData = new FormData();
+          Object.entries(camposPagare).forEach(([k, v]) => formData.append(k, v));
+          formData.append('pdf', { uri, name: `pagare_${Date.now()}.pdf`, type: 'application/pdf' });
+          const { data } = await api.post('/pagares', formData, { timeout: 30000, headers: { 'Content-Type': 'multipart/form-data' } });
+          setPagareGuardadoId(data?.pagare?.id || null);
+        } else {
+          await offlineQueue.enqueueRequest({
+            method: 'POST', url: '/pagares', label: `Pagaré ${pagareNombreDeudor.trim()}`,
+            useFormData: true,
+            data: { ...camposPagare, pdf: { uri, name: `pagare_${Date.now()}.pdf`, type: 'application/pdf' } },
+          });
+          // Guardado offline: no hay id todavía para enlazar con la venta —
+          // se puede enlazar manualmente desde el panel si hace falta.
+        }
+      } catch (e) {
+        console.warn('No se pudo guardar el pagaré en el servidor:', e?.message);
+        Alert.alert('Aviso', 'El PDF se generará igual, pero no se pudo guardar el pagaré en el sistema. Se seguirá con la venta normalmente.');
+      }
+
       const puedeCompartir = await Sharing.isAvailableAsync();
       if (puedeCompartir) {
         await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Pagaré firmado', UTI: 'com.adobe.pdf' });
@@ -789,15 +820,19 @@ export default function NuevaVentaScreen({ navigation }) {
         setAsignMsg('No hay asignación activa para hoy');
         setProductos([]);
       } else if (isOffline) {
-        // Usar caché de la asignación de HOY solamente
+        // Usar la última asignación guardada, aunque sea de un día anterior
+        // — es mejor respaldo de emergencia que dejar al vendedor sin nada
+        // si el día arranca con mala señal.
         const cache = await leerAsignacionCache();
         if (cache) {
           setProductos(cache.productos);
           setCategorias(cache.categorias || []);
           setAsignacionId(cache.asignacionId);
-          setAsignMsg('Sin conexión — mostrando asignación de hoy guardada');
+          setAsignMsg(cache.esDeHoy
+            ? 'Sin conexión — mostrando asignación de hoy guardada'
+            : '⚠️ Sin conexión — mostrando asignación de un día anterior, puede no estar actualizada');
         } else {
-          setAsignMsg('Sin conexión y no hay asignación de hoy guardada.\nConéctate una vez para cargar la asignación del día.');
+          setAsignMsg('Sin conexión y no hay ninguna asignación guardada.\nConéctate una vez para cargar la asignación del día.');
           setProductos([]);
         }
       } else {
@@ -1056,9 +1091,18 @@ export default function NuevaVentaScreen({ navigation }) {
     try {
       const { data } = await api.post('/ventas', payload);
 
+      // Si se firmó un pagaré antes de confirmar esta venta, enlazarlo ahora
+      // que ya existe venta_id. No bloquea la navegación — si falla, el
+      // pagaré queda guardado igual, solo sin enlace automático.
+      if (pagareGuardadoId && data?.id) {
+        api.patch(`/pagares/${pagareGuardadoId}/venta`, { venta_id: data.id })
+          .catch(e => console.warn('No se pudo enlazar el pagaré con la venta:', e?.message));
+      }
+
       const carritoSnapshot = [...carrito];
       const totalsSnapshot  = { ...cartTotals, clienteNombre: cliente.nombre };
       limpiarVenta();
+      setPagareGuardadoId(null);
 
       navigation.replace('VentaRegistrada', {
         venta:           data,

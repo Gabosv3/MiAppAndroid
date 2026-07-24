@@ -26,14 +26,17 @@ export const guardarAsignacionCache = async ({ productos, categorias, asignacion
   }));
 };
 
+// Igual que leerRutaCache en cobrosOffline.js: antes se descartaba por
+// completo si no era de hoy, dejando al vendedor sin nada que vender si el
+// día arrancaba con mala señal. Ahora se devuelve igual, marcada con
+// `esDeHoy` para que la pantalla avise que es la asignación de un día
+// anterior en vez de dejarlo completamente sin productos.
 export const leerAsignacionCache = async () => {
   const raw = await AsyncStorage.getItem(ASIGNACION_KEY);
   if (!raw) return null;
   try {
     const cache = JSON.parse(raw);
-    // Solo válida si es de hoy
-    if (cache.fecha !== fechaHoy()) return null;
-    return cache;
+    return { ...cache, esDeHoy: cache.fecha === fechaHoy() };
   } catch { return null; }
 };
 

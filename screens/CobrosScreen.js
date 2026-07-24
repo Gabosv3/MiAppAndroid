@@ -26,6 +26,7 @@ export default function CobrosScreen({ navigation }) {
   const [query,    setQuery]    = useState('');
   const [rutaId,   setRutaId]   = useState(null);
   const [esCache,  setEsCache]  = useState(false);
+  const [cacheVieja, setCacheVieja] = useState(false); // caché de un día anterior (mala señal desde el inicio del día)
   const [pagosPend,setPagosPend]= useState(0);
   const [ordenIds, setOrdenIds] = useState([]);
   const [visitadosIds, setVisitadosIds] = useState([]);
@@ -47,6 +48,7 @@ export default function CobrosScreen({ navigation }) {
         setRutas(data.rutas || []);
         if ((data.rutas||[]).length === 1) setRutaId(data.rutas[0].id);
         setEsCache(false);
+        setCacheVieja(false);
         const pendientes = await contarPagosPendientes();
         if (pendientes > 0) {
           const result = await sincronizarPagosPendientes(api);
@@ -59,6 +61,7 @@ export default function CobrosScreen({ navigation }) {
           setRutas(cache.data.rutas || []);
           if ((cache.data.rutas||[]).length === 1) setRutaId(cache.data.rutas[0].id);
           setEsCache(true);
+          setCacheVieja(!cache.esDeHoy);
         } else {
           setError('Sin conexión y no hay datos guardados.\nConéctate para cargar tu ruta.');
         }
@@ -69,6 +72,7 @@ export default function CobrosScreen({ navigation }) {
         setDia(cache.data.dia || '');
         setRutas(cache.data.rutas || []);
         setEsCache(true);
+        setCacheVieja(!cache.esDeHoy);
       } else {
         setError(e?.message || 'Error');
       }
@@ -413,9 +417,11 @@ export default function CobrosScreen({ navigation }) {
 
       {/* Banner offline */}
       {!modoReorden && (!isOnline || esCache) && (
-        <View style={s.offlineBanner}>
+        <View style={[s.offlineBanner, cacheVieja && { backgroundColor: '#ffe0b2' }]}>
           <Text style={s.offlineTxt}>
-            {!isOnline ? '📴 Sin conexión' : '📦 Datos en caché'} — los cobros se guardarán y enviarán al reconectarte
+            {cacheVieja
+              ? '⚠️ Ruta guardada de un día anterior — puede no estar actualizada. Conéctate para refrescarla.'
+              : `${!isOnline ? '📴 Sin conexión' : '📦 Datos en caché'} — los cobros se guardarán y enviarán al reconectarte`}
           </Text>
         </View>
       )}
