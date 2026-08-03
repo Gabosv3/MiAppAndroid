@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, StatusBar,
-  ScrollView, ActivityIndicator, Linking, Modal, TextInput, Alert,
+  ScrollView, ActivityIndicator, Linking, Modal, TextInput, Alert, Platform,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
@@ -346,6 +346,23 @@ export default function DetalleClienteScreen({ navigation, route }) {
     }
   };
 
+  // Abre la app de mapas del teléfono directo en la ubicación guardada del
+  // cliente — solo tiene sentido si el cliente ya tiene lat/long registrada.
+  // Si no tiene, el botón de arriba muestra "Actualizar ubicación" en su lugar.
+  const abrirDireccion = () => {
+    const lat = cliente?.latitud;
+    const lng = cliente?.longitud;
+    if (!lat || !lng) return;
+    const label = encodeURIComponent(cliente?.nombre || 'Cliente');
+    const url = Platform.OS === 'ios'
+      ? `maps:0,0?q=${label}@${lat},${lng}`
+      : `geo:${lat},${lng}?q=${lat},${lng}(${label})`;
+    Linking.openURL(url).catch(() => {
+      // Si el teléfono no tiene app de mapas nativa, usar Google Maps web
+      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`);
+    });
+  };
+
   const guardarTelefonos = async () => {
     if (!telNormal.trim() && !telWhatsapp.trim()) {
       Alert.alert('Error', 'Ingresa al menos un número de teléfono');
@@ -546,11 +563,17 @@ export default function DetalleClienteScreen({ navigation, route }) {
           <View style={s.accionRow}>
             <TouchableOpacity
               style={[s.ubicBtn, { flex: 1 }, updatingUbic && { opacity: 0.5 }]}
-              onPress={actualizarUbicacion}
+              onPress={(cliente?.latitud && cliente?.longitud) ? abrirDireccion : actualizarUbicacion}
               disabled={updatingUbic}
             >
-              <Text style={{ fontSize: 26 }}>{updatingUbic ? '⏳' : '📍'}</Text>
-              <Text style={s.ubicBtnTxt}>{updatingUbic ? 'Actualizando...' : 'Actualizar\nubicación'}</Text>
+              <Text style={{ fontSize: 26 }}>
+                {updatingUbic ? '⏳' : (cliente?.latitud && cliente?.longitud) ? '🧭' : '📍'}
+              </Text>
+              <Text style={s.ubicBtnTxt}>
+                {updatingUbic
+                  ? 'Actualizando...'
+                  : (cliente?.latitud && cliente?.longitud) ? 'Dirigir\nubicación' : 'Actualizar\nubicación'}
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity style={[s.telBtn, { flex: 1 }]} onPress={abrirModalTel}>
               <Text style={{ fontSize: 26 }}>📞</Text>
@@ -623,12 +646,14 @@ export default function DetalleClienteScreen({ navigation, route }) {
           {ventas.map(venta => {
             return (
               <View key={venta.id} style={s.ventaCard}>
-                {/* Venta header */}
+                {/* Venta header — el producto va primero, es lo que el cobrador
+                    reconoce de un vistazo; el número de venta queda como dato secundario */}
                 <View style={s.ventaHeader}>
                   <View style={s.ventaIconBox}>
-                    <Text style={{fontSize:20}}>📋</Text>
+                    <Text style={{fontSize:20}}>📦</Text>
                   </View>
                   <View style={{flex:1,marginLeft:12}}>
+                    {venta.producto && <Text style={s.ventaProducto} numberOfLines={2}>{venta.producto}</Text>}
                     <Text style={s.ventaNum}>{venta.numero_venta}</Text>
                     <Text style={s.ventaFecha}>Fecha: {venta.fecha_venta}</Text>
                   </View>
@@ -953,7 +978,8 @@ const s = StyleSheet.create({
   },
   ventaHeader:  { flexDirection:'row', alignItems:'center', marginBottom:14 },
   ventaIconBox: { width:42,height:42, borderRadius:21, backgroundColor:'#e3f2fd', alignItems:'center', justifyContent:'center' },
-  ventaNum:     { color:'#1a1a1a', fontSize:15, fontWeight:'800' },
+  ventaProducto:{ color:'#1a1a1a', fontSize:15, fontWeight:'800', marginBottom:2 },
+  ventaNum:     { color:'#888', fontSize:12, fontWeight:'600' },
   ventaFecha:   { color:'#999', fontSize:12, marginTop:2 },
   montosRow:    { flexDirection:'row', backgroundColor:'#f8f9fc', borderRadius:10, padding:10, marginBottom:12 },
   montoItem:    { flex:1, alignItems:'center' },
