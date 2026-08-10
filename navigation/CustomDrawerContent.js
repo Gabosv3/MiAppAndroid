@@ -27,7 +27,7 @@ const NAV_ITEMS = [
   { name: 'Reportes', icon: '📊', disabled: true },
 ];
 
-export default function CustomDrawer({ visible, onClose }) {
+export default function CustomDrawer({ visible, onClose, navigation }) {
   const { colors, mode, toggleTheme } = useTheme();
   const { user, logout } = useAuth();
   const { isOnline } = useConnectivity();
@@ -68,6 +68,11 @@ export default function CustomDrawer({ visible, onClose }) {
   const handleLogout = () => {
     onClose();
     setTimeout(() => logout(), 300);
+  };
+
+  const handleCambiarPin = () => {
+    onClose();
+    setTimeout(() => navigation?.navigate('CambiarPin'), 300);
   };
 
   const s = styles(colors);
@@ -122,6 +127,11 @@ export default function CustomDrawer({ visible, onClose }) {
               thumbColor={mode === 'dark' ? colors.accent : '#ccc'}
             />
           </View>
+
+          <TouchableOpacity style={s.pinButton} onPress={handleCambiarPin} activeOpacity={0.7}>
+            <Text style={s.pinIcon}>🔒</Text>
+            <Text style={s.pinLabel}>Cambiar PIN</Text>
+          </TouchableOpacity>
 
           <View style={s.footerDivider} />
 
@@ -257,6 +267,14 @@ const styles = (c) => StyleSheet.create({
     fontWeight: '500',
     flex: 1,
   },
+  pinButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+  },
+  pinIcon: { fontSize: 18, marginRight: 12 },
+  pinLabel: { color: c.textSec, fontSize: 13, fontWeight: '500', flex: 1 },
   footerDivider: {
     height: 1,
     backgroundColor: c.border,

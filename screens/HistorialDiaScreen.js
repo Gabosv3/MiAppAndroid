@@ -101,6 +101,7 @@ const VISITA_INFO = {
   promesa_pago:  { label: 'Prometió pagar',      icon: '🤝', color: '#2e7d32', bg: '#e8f5e9' },
   rechazo:       { label: 'Se negó a atender',   icon: '⛔', color: '#c62828', bg: '#ffebee' },
   abono_previo:  { label: 'Ya abonó mensualidad',icon: '✅', color: '#00695c', bg: '#e0f2f1' },
+  sin_saldo:     { label: 'Cuenta al día (sin saldo)', icon: '💚', color: '#2e7d32', bg: '#e8f5e9' },
 };
 
 // Formato compacto — igual al recibo original al momento de cobrar. No

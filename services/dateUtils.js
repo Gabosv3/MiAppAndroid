@@ -14,6 +14,14 @@ const pad2 = (n) => String(n).padStart(2, '0');
 
 // Convierte cualquier Date a su fecha "YYYY-MM-DD" en hora de El Salvador.
 export const fechaLocalDesde = (date) => {
+  // Un string "YYYY-MM-DD" puro (ej. la fecha de próxima visita) ya ES el día
+  // calendario que se quiso decir — no representa un instante que haya que
+  // convertir. `new Date("2026-08-10")` lo interpreta como medianoche UTC, y
+  // restarle el offset de El Salvador lo corre un día hacia atrás. Se
+  // devuelve tal cual, sin pasar por la conversión de instante a zona horaria.
+  if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return date;
+  }
   const d = date instanceof Date ? date : new Date(date);
   if (isNaN(d.getTime())) return '';
   // Normaliza a UTC real, sin importar la zona horaria del dispositivo, y

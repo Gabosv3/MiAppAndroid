@@ -35,6 +35,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { extractTextFromImage } from '../services/ocr';
 import { fmtFechaCorta } from '../services/dateUtils';
 import FirmaPad from '../components/FirmaPad';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -70,6 +71,7 @@ export default function NuevaVentaScreen({ navigation }) {
   const { colors } = useTheme();
   const { user } = useAuth();
   const { isOnline } = useConnectivity();
+  const insets = useSafeAreaInsets();
 
   const sucursalId = user?.sucursales?.[0]?.id || 1;
 
@@ -1401,14 +1403,14 @@ export default function NuevaVentaScreen({ navigation }) {
                   <View style={s.stockBadge}>
                     <Text style={s.stockTxt}>{(item.stock_disponible ?? item.stock ?? 0) > 0 ? `Stock: ${item.stock_disponible}` : 'Sin stock'}</Text>
                   </View>
-                  <TouchableOpacity
-                    style={[s.addBtn, (item.stock_disponible ?? 0) <= 0 && s.addBtnDisabled]}
-                    onPress={() => agregarProducto(item)}
-                    disabled={(item.stock_disponible ?? 0) <= 0}
-                  >
-                    <Text style={s.addBtnTxt}>+</Text>
-                  </TouchableOpacity>
                 </View>
+                <TouchableOpacity
+                  style={[s.addBtn, (item.stock_disponible ?? 0) <= 0 && s.addBtnDisabled]}
+                  onPress={() => agregarProducto(item)}
+                  disabled={(item.stock_disponible ?? 0) <= 0}
+                >
+                  <Text style={s.addBtnTxt}>+</Text>
+                </TouchableOpacity>
               </TouchableOpacity>
             )}
             ListEmptyComponent={
@@ -1422,7 +1424,7 @@ export default function NuevaVentaScreen({ navigation }) {
         )}
 
         {/* ═══ DERECHA: Panel de venta ════════════════════════════════════ */}
-        <View style={s.cartPanel}>
+        <View style={[s.cartPanel, { paddingBottom: Math.max(8, insets.bottom + 4) }]}>
           <Text style={s.cartTitle}>Venta Actual</Text>
 
           {/* Cliente */}
@@ -2006,9 +2008,9 @@ const styles = (c) => StyleSheet.create({
   // Grid productos
   grid: { flex: 1 },
   prodCard: {
-    width: '48.5%',
+    width: '48.5%', position: 'relative',
     backgroundColor: c.surface, borderRadius: 10,
-    borderWidth: 1, borderColor: c.border, padding: 8, overflow: 'hidden',
+    borderWidth: 1, borderColor: c.border, padding: 8, paddingRight: 30, overflow: 'visible',
   },
   prodImgBox: {
     backgroundColor: c.surfaceAlt, borderRadius: 8, height: 56,
@@ -2018,11 +2020,19 @@ const styles = (c) => StyleSheet.create({
   prodNombre: { fontSize: 11, color: c.text, fontWeight: '600', minHeight: 30, lineHeight: 15 },
   prodCodigo: { fontSize: 9, color: c.textMuted, marginBottom: 2 },
   prodCuotas: { fontSize: 9, color: '#0B5FFF', marginBottom: 2 },
-  prodFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
+  // Precio y stock en su propia fila (sin el botón +, que ahora flota aparte)
+  // — antes los tres compartían una sola fila y en tarjetas angostas el
+  // botón terminaba empujado fuera del borde de la tarjeta.
+  prodFooter: { marginTop: 4, gap: 3 },
   prodPrecio: { fontSize: 12, fontWeight: '700', color: c.accent },
-  stockBadge: { backgroundColor: c.surfaceAlt, borderRadius: 4, paddingHorizontal: 4, paddingVertical: 1 },
+  stockBadge: { backgroundColor: c.surfaceAlt, borderRadius: 4, paddingHorizontal: 4, paddingVertical: 1, alignSelf: 'flex-start' },
   stockTxt:   { fontSize: 9, color: c.textMuted, fontWeight: '600' },
-  addBtn:     { backgroundColor: '#10B981', width: 24, height: 24, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
+  addBtn:     {
+    position: 'absolute', bottom: 8, right: 8,
+    backgroundColor: '#10B981', width: 26, height: 26, borderRadius: 13,
+    alignItems: 'center', justifyContent: 'center', elevation: 2,
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 2, shadowOffset: { width: 0, height: 1 },
+  },
   addBtnDisabled: { backgroundColor: '#94D3B2', opacity: 0.6 },
   addBtnTxt:  { color: '#fff', fontSize: 18, lineHeight: 22, fontWeight: '700' },
 

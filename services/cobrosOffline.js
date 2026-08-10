@@ -72,11 +72,17 @@ export const leerClienteCache = async (clienteId) => {
 
 // ─── PAGOS PENDIENTES ────────────────────────────────────────────────────────
 
-export const encolarPago = async ({ clienteId, clienteNombre, ventaId, ventaNumero, numeroRecibo, monto, metodo, referencia, notas }) => {
+// `id` es también la clave de idempotencia que ve el servidor
+// (`idempotency_key` en el POST /pagar). Si ya se generó al intentar el cobro
+// online por primera vez, se reutiliza aquí para que el reintento offline
+// tenga la MISMA clave — así, si el primer intento sí llegó a procesarse en
+// el servidor pero el teléfono no alcanzó a recibir la respuesta (timeout),
+// el reintento no crea un segundo cobro.
+export const encolarPago = async ({ id, clienteId, clienteNombre, ventaId, ventaNumero, numeroRecibo, monto, metodo, referencia, notas }) => {
   const raw = await AsyncStorage.getItem(KEYS.pagos);
   const cola = raw ? JSON.parse(raw) : [];
   const item = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+    id: id || `${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
     clienteId, clienteNombre, ventaId, ventaNumero, numeroRecibo,
     monto, metodo, referencia, notas,
     creadoEn: new Date().toISOString(),
@@ -267,6 +273,7 @@ const _sincronizarPagosPendientesInterno = async (api) => {
       const { data } = await api.post(`/cobros/clientes/${pago.clienteId}/pagar`, {
         monto: pago.monto,
         metodo_pago: pago.metodo,
+        idempotency_key: pago.id,
         ...(pago.ventaId != null && { venta_id: pago.ventaId }),
         ...(pago.referencia && { referencia: pago.referencia }),
         ...(pago.notas      && { observaciones: pago.notas }),

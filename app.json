@@ -2,7 +2,7 @@
   "expo": {
     "name": "SIDB",
     "slug": "sidb",
-    "version": "1.0.2",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/img/logo.png",
     "userInterfaceStyle": "light",
@@ -21,12 +21,13 @@
         "backgroundColor": "#ffffff"
       },
       "package": "com.sidb.distribuidora",
+      "versionCode": 15,
       "permissions": [
-        "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION",
-        "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION"
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
       ]
     },
     "web": {
@@ -49,12 +50,18 @@
       [
         "expo-image-picker",
         {
-          "cameraPermission": "Esta app necesita la cámara para tomar fotos de visitas."
+          "cameraPermission": "Esta app necesita la cámara para tomar fotos de visitas.",
+          "microphonePermission": false
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "extra": {
-      "EXPO_PUBLIC_API_URL": "https://panel.distribuidorabriancescomenjivar.com/api"
-    }
+      "EXPO_PUBLIC_API_URL": "https://panel.distribuidorabriancescomenjivar.com/api",
+      "eas": {
+        "projectId": "f8e3fe95-33b0-4379-a651-debc63eb6d21"
+      }
+    },
+    "owner": "gabosv3"
   }
 }

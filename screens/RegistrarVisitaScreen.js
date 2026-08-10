@@ -17,16 +17,32 @@ const RESULTADOS = [
   { value: 'promesa_pago',  label: 'Prometió pagar',      icon: '🤝', color: '#2e7d32', bg: '#e8f5e9' },
   { value: 'rechazo',       label: 'Se negó a atender',   icon: '⛔', color: '#c62828', bg: '#ffebee' },
   { value: 'abono_previo',  label: 'Ya abonó mensualidad',icon: '✅', color: '#00695c', bg: '#e0f2f1' },
+  // Para cuentas vinculadas que ya están en $0 (nada que cobrar) pero igual
+  // se visitó la casa: deja registrada la gestión del día sin exigir un pago
+  // que no corresponde. Requiere que el backend acepte este mismo valor
+  // ('sin_saldo') en POST /cobros/clientes/{id}/visita.
+  { value: 'sin_saldo',     label: 'Cuenta al día (sin saldo)', icon: '💚', color: '#2e7d32', bg: '#e8f5e9' },
 ];
 
 // Opciones que NO requieren foto ni GPS
-const SIN_EVIDENCIA = new Set(['abono_previo']);
+const SIN_EVIDENCIA = new Set(['abono_previo', 'sin_saldo']);
+
+const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
 export default function RegistrarVisitaScreen({ navigation, route }) {
-  const { cliente } = route.params;
+  const { cliente, grupoClientes, resultadoInicial } = route.params;
   const { isOnline } = useConnectivity();
 
-  const [resultado,      setResultado]     = useState(null);
+  // Con cuentas vinculadas, cada una puede tener un resultado distinto (ej.
+  // una "ya abonó mensualidad" y otras dos "no estaba en casa") — no todas
+  // tienen que coincidir. Sin grupo, se usa el selector único de siempre.
+  const esGrupo = grupoClientes?.length > 1;
+  const miembros = esGrupo ? grupoClientes : [cliente];
+
+  const [resultado,      setResultado]     = useState(resultadoInicial || null); // solo modo individual
+  const [resultadosPorCliente, setResultadosPorCliente] = useState(
+    esGrupo ? Object.fromEntries(grupoClientes.map(m => [m.id, resultadoInicial || null])) : {}
+  );
   const [observaciones,  setObservaciones] = useState('');
   const [opcionPromesa,    setOpcionPromesa]    = useState('14'); // '14' | '28' | 'custom'
   const [promesaCustomDate,setPromesaCustomDate] = useState(new Date());
@@ -35,6 +51,12 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
   const [ubicacion,     setUbicacion]     = useState(null);
   const [capturandoGps, setCapturandoGps] = useState(false);
   const [submitting,    setSubmitting]    = useState(false);
+
+  const resultadoDe = (destino) => esGrupo ? resultadosPorCliente[destino.id] : resultado;
+  const setResultadoDe = (destinoId, valor) => {
+    if (esGrupo) setResultadosPorCliente(prev => ({ ...prev, [destinoId]: valor }));
+    else setResultado(valor);
+  };
 
   // GPS silencioso — el cobrador no ve esto
   const capturarGpsSilencioso = useCallback(async () => {
@@ -83,20 +105,29 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
     return dateToStr(d);
   };
 
-  const fechaValida = (f) => /^\d{4}-\d{2}-\d{2}$/.test(f) && new Date(f) > new Date();
+  // Entre todos los destinos, ¿alguno necesita evidencia (foto+GPS)? Si al
+  // menos uno la necesita, se pide UNA sola foto/ubicación y se adjunta solo
+  // a los que la requieren — los demás (ej. "ya abonó") van sin ella.
+  const algunoNecesitaEvidencia = miembros.some(m => {
+    const r = resultadoDe(m);
+    return r && !SIN_EVIDENCIA.has(r);
+  });
+  const algunoTienePromesa = miembros.some(m => resultadoDe(m) === 'promesa_pago');
+  const todosTienenResultado = miembros.every(m => !!resultadoDe(m));
 
   // Registrar visita
   const registrar = useCallback(async () => {
-    if (!resultado) {
-      Alert.alert('Falta seleccionar', 'Elige qué pasó en la visita.');
+    if (!todosTienenResultado) {
+      Alert.alert('Falta seleccionar', esGrupo
+        ? 'Elige qué pasó con cada cuenta del grupo.'
+        : 'Elige qué pasó en la visita.');
       return;
     }
-    const esSinEvidencia = SIN_EVIDENCIA.has(resultado);
-    if (!esSinEvidencia && !foto) {
+    if (algunoNecesitaEvidencia && !foto) {
       Alert.alert('Foto requerida', 'Debes tomar una foto del hogar para registrar la visita.');
       return;
     }
-    // Calcular fecha promesa dentro del callback para evitar closures stale
+
     const calcFecha = () => {
       if (opcionPromesa === 'custom') {
         const d = promesaCustomDate;
@@ -106,8 +137,8 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
       d.setDate(d.getDate() + Number(opcionPromesa));
       return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     };
-    const promesaFecha = resultado === 'promesa_pago' ? calcFecha() : null;
-    if (resultado === 'promesa_pago') {
+    const promesaFecha = calcFecha();
+    if (algunoTienePromesa) {
       const esValida = /^\d{4}-\d{2}-\d{2}$/.test(promesaFecha) && new Date(promesaFecha) > new Date();
       if (!esValida) {
         Alert.alert('Fecha inválida', 'La fecha personalizada debe ser futura con formato YYYY-MM-DD.');
@@ -115,110 +146,141 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
       }
     }
 
-    // Guarda la visita en la cola offline — usado tanto si ya sabíamos que
-    // no había conexión, como si el request online falló por un problema
-    // transitorio (red caída a mitad de camino, servidor 5xx). Sin este
-    // respaldo en el catch, una falla momentánea perdía la visita completa
-    // (incluida la foto ya tomada) y obligaba a rehacerla.
-    const guardarOffline = async () => {
+    // Guarda la visita de UN cliente en la cola offline — usado tanto si ya
+    // sabíamos que no había conexión, como si el request online falló por un
+    // problema transitorio (red caída a mitad de camino, servidor 5xx). Sin
+    // este respaldo en el catch, una falla momentánea perdía la visita
+    // completa (incluida la foto ya tomada) y obligaba a rehacerla.
+    const guardarOffline = async (destino, resultadoDestino, sinEvidenciaDestino) => {
       await offlineQueue.enqueueRequest({
         method: 'POST',
-        url: `/cobros/clientes/${cliente.id}/visita`,
-        label: `Visita ${cliente.nombre}`,
-        useFormData: !esSinEvidencia,
+        url: `/cobros/clientes/${destino.id}/visita`,
+        label: `Visita ${destino.nombre}`,
+        useFormData: !sinEvidenciaDestino,
         data: {
-          resultado,
+          resultado: resultadoDestino,
           ...(observaciones.trim() && { observaciones: observaciones.trim() }),
-          ...(resultado === 'promesa_pago' && { promesa_fecha: promesaFecha }),
-          ...(!esSinEvidencia && ubicacion && { latitud: String(ubicacion.lat), longitud: String(ubicacion.lng) }),
-          ...(!esSinEvidencia && foto && { foto_hogar: { uri: foto.uri, type: foto.type || 'image/jpeg', name: foto.name || 'foto_hogar.jpg' } }),
+          ...(resultadoDestino === 'promesa_pago' && { promesa_fecha: promesaFecha }),
+          ...(!sinEvidenciaDestino && ubicacion && { latitud: String(ubicacion.lat), longitud: String(ubicacion.lng) }),
+          ...(!sinEvidenciaDestino && foto && { foto_hogar: { uri: foto.uri, type: foto.type || 'image/jpeg', name: foto.name || 'foto_hogar.jpg' } }),
         },
       });
       await guardarEnHistorial({
-        clienteId: cliente.id, clienteNombre: cliente.nombre,
-        clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
-        tipo: 'visita', resultadoVisita: resultado,
+        clienteId: destino.id, clienteNombre: destino.nombre,
+        clienteWhatsapp: destino.whatsapp || destino.telefono || null,
+        tipo: 'visita', resultadoVisita: resultadoDestino,
         observaciones: observaciones.trim() || null,
         resultado: { ok: true, mensaje: 'Visita pendiente de envío (offline)' },
       });
-      await marcarClienteVisitado(cliente.id);
-      Alert.alert(
-        '📴 Guardado sin conexión',
-        'La visita (con foto) se enviará automáticamente cuando recuperes la señal.',
-        [{ text: 'OK', onPress: () => navigation.goBack() }]
-      );
+      await marcarClienteVisitado(destino.id);
+    };
+
+    // Registra la visita para UN cliente con SU propio resultado: intenta
+    // online, si falla por algo transitorio (o si ya sabíamos que no había
+    // conexión) cae a la cola offline. Se llama una vez por cada miembro.
+    const registrarParaCliente = async (destino) => {
+      const resultadoDestino = resultadoDe(destino);
+      const sinEvidenciaDestino = SIN_EVIDENCIA.has(resultadoDestino);
+
+      if (!isOnline) {
+        await guardarOffline(destino, resultadoDestino, sinEvidenciaDestino);
+        return { ok: true, offline: true };
+      }
+      try {
+        let payload;
+        let headers = {};
+
+        if (sinEvidenciaDestino) {
+          payload = {
+            resultado: resultadoDestino,
+            ...(observaciones.trim() && { observaciones: observaciones.trim() }),
+          };
+          headers = { 'Content-Type': 'application/json' };
+        } else {
+          // Con foto — multipart/form-data. Se construye un FormData nuevo
+          // por cliente (no se puede reutilizar el mismo objeto ya enviado).
+          const form = new FormData();
+          form.append('resultado', resultadoDestino);
+          if (observaciones.trim()) form.append('observaciones', observaciones.trim());
+          if (resultadoDestino === 'promesa_pago') form.append('promesa_fecha', promesaFecha);
+          if (ubicacion) {
+            form.append('latitud',  String(ubicacion.lat));
+            form.append('longitud', String(ubicacion.lng));
+          }
+          form.append('foto_hogar', {
+            uri: Platform.OS === 'ios' ? foto.uri.replace('file://', '') : foto.uri,
+            type: foto.type,
+            name: foto.name,
+          });
+          payload = form;
+          headers = { 'Content-Type': 'multipart/form-data' };
+        }
+
+        const { data } = await api.post(`/cobros/clientes/${destino.id}/visita`, payload, { headers });
+        await guardarEnHistorial({
+          clienteId: destino.id, clienteNombre: destino.nombre,
+          clienteWhatsapp: destino.whatsapp || destino.telefono || null,
+          tipo: 'visita', resultadoVisita: resultadoDestino,
+          observaciones: observaciones.trim() || null,
+          resultado: data,
+        });
+        await marcarClienteVisitado(destino.id);
+        return { ok: true, offline: false };
+      } catch (e) {
+        if (esErrorTransitorio(e)) {
+          await guardarOffline(destino, resultadoDestino, sinEvidenciaDestino);
+          return { ok: true, offline: true };
+        }
+        return { ok: false, error: e?.response?.data?.message || e?.message || 'No se pudo registrar la visita.' };
+      }
     };
 
     setSubmitting(true);
     try {
-      if (isOnline) {
-        try {
-          let payload;
-          let headers = {};
+      const resultados = [];
+      for (const destino of miembros) {
+        resultados.push({ destino, ...(await registrarParaCliente(destino)) });
+      }
 
-          if (esSinEvidencia) {
-            // Sin foto — enviar como JSON normal
-            payload = {
-              resultado,
-              ...(observaciones.trim() && { observaciones: observaciones.trim() }),
-            };
-            headers = { 'Content-Type': 'application/json' };
-          } else {
-            // Con foto — multipart/form-data
-            const form = new FormData();
-            form.append('resultado', resultado);
-            if (observaciones.trim()) form.append('observaciones', observaciones.trim());
-            if (resultado === 'promesa_pago') form.append('promesa_fecha', promesaFecha);
-            if (ubicacion) {
-              form.append('latitud',  String(ubicacion.lat));
-              form.append('longitud', String(ubicacion.lng));
-            }
-            form.append('foto_hogar', {
-              uri: Platform.OS === 'ios' ? foto.uri.replace('file://', '') : foto.uri,
-              type: foto.type,
-              name: foto.name,
-            });
-            payload = form;
-            headers = { 'Content-Type': 'multipart/form-data' };
-          }
+      const exitosos = resultados.filter(r => r.ok);
+      const huboOffline = resultados.some(r => r.offline);
+      const fallidos = resultados.filter(r => !r.ok);
 
-          const { data } = await api.post(`/cobros/clientes/${cliente.id}/visita`, payload, { headers });
-          await guardarEnHistorial({
-            clienteId: cliente.id, clienteNombre: cliente.nombre,
-            clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
-            tipo: 'visita', resultadoVisita: resultado,
-            observaciones: observaciones.trim() || null,
-            resultado: data,
-          });
-          await marcarClienteVisitado(cliente.id);
+      if (miembros.length === 1) {
+        if (exitosos.length === 1) {
           Alert.alert(
-            '✅ Visita registrada',
-            'La gestión quedó guardada correctamente.',
+            huboOffline ? '📴 Guardado sin conexión' : '✅ Visita registrada',
+            huboOffline
+              ? 'La visita (con foto) se enviará automáticamente cuando recuperes la señal.'
+              : 'La gestión quedó guardada correctamente.',
             [{ text: 'OK', onPress: () => navigation.goBack() }]
           );
-        } catch (e) {
-          if (esErrorTransitorio(e)) {
-            await guardarOffline();
-          } else {
-            Alert.alert('Error', e?.response?.data?.message || e?.message || 'No se pudo registrar la visita.');
-          }
+        } else {
+          Alert.alert('Error', fallidos[0]?.error || 'No se pudo registrar la visita.');
         }
       } else {
-        await guardarOffline();
+        const detalle = fallidos.length
+          ? `\n\nNo se pudo en: ${fallidos.map(f => f.destino.nombre).join(', ')}`
+          : '';
+        Alert.alert(
+          exitosos.length > 0 ? '✅ Visita registrada para el grupo' : 'Error',
+          `${exitosos.length} de ${miembros.length} cuenta${miembros.length !== 1 ? 's' : ''} registrada${exitosos.length !== 1 ? 's' : ''}.${huboOffline ? ' (algunas quedaron pendientes de envío sin conexión)' : ''}${detalle}`,
+          [{ text: 'OK', onPress: () => exitosos.length > 0 && navigation.goBack() }]
+        );
       }
     } catch (e) {
       Alert.alert('Error', e?.response?.data?.message || e?.message || 'No se pudo registrar la visita.');
     } finally {
       setSubmitting(false);
     }
-  }, [resultado, observaciones, opcionPromesa, promesaCustomDate, foto, ubicacion, isOnline, cliente.id, navigation]);
+  }, [resultado, resultadosPorCliente, observaciones, opcionPromesa, promesaCustomDate, foto, ubicacion, isOnline, cliente, grupoClientes, navigation, todosTienenResultado, algunoNecesitaEvidencia, algunoTienePromesa]);
 
-  const resObj = RESULTADOS.find(r => r.value === resultado);
-  const sinEvidencia = !!resultado && SIN_EVIDENCIA.has(resultado);
-  // Sin evidencia (ej: abono_previo): solo necesita resultado seleccionado
-  // Con evidencia: requiere foto + ubicación GPS
-  const puedeRegistrar = resultado && !submitting &&
-    (sinEvidencia || (foto && ubicacion && !capturandoGps));
+  const resObjIndividual = RESULTADOS.find(r => r.value === resultado);
+  const necesitaFoto = esGrupo ? algunoNecesitaEvidencia : (!!resultado && !SIN_EVIDENCIA.has(resultado));
+  // Sin evidencia: solo necesita resultado(s) seleccionados. Con evidencia:
+  // requiere foto + ubicación GPS además.
+  const puedeRegistrar = todosTienenResultado && !submitting &&
+    (!necesitaFoto || (foto && ubicacion && !capturandoGps));
 
   return (
     <View style={s.root}>
@@ -231,7 +293,10 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
         </TouchableOpacity>
         <View>
           <Text style={s.headerTitle}>Registrar visita</Text>
-          <Text style={s.headerSub}>{cliente.nombre}</Text>
+          <Text style={s.headerSub}>
+            {esGrupo ? `${miembros.length} cuentas vinculadas` : cliente.nombre}
+            {!esGrupo && cliente.cuotaMensual > 0 ? ` · Cuota: ${fmt(cliente.cuotaMensual)}` : ''}
+          </Text>
         </View>
       </View>
 
@@ -244,27 +309,62 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
       <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 40 }}>
 
-        {/* ── Qué pasó ── */}
-        <View style={s.card}>
-          <Text style={s.cardTitle}>¿Qué pasó en la visita?</Text>
-          {RESULTADOS.map(r => (
-            <TouchableOpacity
-              key={r.value}
-              style={[s.opcion, resultado === r.value && { backgroundColor: r.bg, borderColor: r.color }]}
-              onPress={() => setResultado(r.value)}
-              activeOpacity={0.75}
-            >
-              <Text style={s.opcionIcon}>{r.icon}</Text>
-              <Text style={[s.opcionLabel, resultado === r.value && { color: r.color, fontWeight: '800' }]}>
-                {r.label}
-              </Text>
-              {resultado === r.value && <Text style={[s.opcionCheck, { color: r.color }]}>✓</Text>}
-            </TouchableOpacity>
-          ))}
-        </View>
+        {esGrupo ? (
+          /* ── Un selector independiente por cada cuenta del grupo ── */
+          <View style={s.card}>
+            <Text style={s.cardTitle}>¿Qué pasó con cada cuenta?</Text>
+            <Text style={s.cardDesc}>Elige el resultado de cada una por separado.</Text>
+            {miembros.map(m => {
+              const rSel = resultadosPorCliente[m.id];
+              return (
+                <View key={m.id} style={s.miembroBox}>
+                  <View style={s.miembroHeaderRow}>
+                    <Text style={s.miembroNombre}>{m.nombre}</Text>
+                    {m.cuotaMensual > 0 && <Text style={s.miembroCuota}>Cuota: {fmt(m.cuotaMensual)}</Text>}
+                  </View>
+                  {m.saldo > 0 && <Text style={s.miembroSaldo}>Saldo pendiente: {fmt(m.saldo)}</Text>}
+                  <View style={s.chipsWrap}>
+                    {RESULTADOS.map(r => (
+                      <TouchableOpacity
+                        key={r.value}
+                        style={[s.chip, rSel === r.value && { backgroundColor: r.bg, borderColor: r.color }]}
+                        onPress={() => setResultadoDe(m.id, r.value)}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={s.chipIcon}>{r.icon}</Text>
+                        <Text style={[s.chipLabel, rSel === r.value && { color: r.color, fontWeight: '800' }]}>
+                          {r.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        ) : (
+          /* ── Selector único (visita a un solo cliente) ── */
+          <View style={s.card}>
+            <Text style={s.cardTitle}>¿Qué pasó en la visita?</Text>
+            {RESULTADOS.map(r => (
+              <TouchableOpacity
+                key={r.value}
+                style={[s.opcion, resultado === r.value && { backgroundColor: r.bg, borderColor: r.color }]}
+                onPress={() => setResultado(r.value)}
+                activeOpacity={0.75}
+              >
+                <Text style={s.opcionIcon}>{r.icon}</Text>
+                <Text style={[s.opcionLabel, resultado === r.value && { color: r.color, fontWeight: '800' }]}>
+                  {r.label}
+                </Text>
+                {resultado === r.value && <Text style={[s.opcionCheck, { color: r.color }]}>✓</Text>}
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
 
-        {/* ── Fecha promesa ── */}
-        {resultado === 'promesa_pago' && (
+        {/* ── Fecha promesa (aplica a quien tenga "Prometió pagar") ── */}
+        {algunoTienePromesa && (
           <View style={s.card}>
             <Text style={s.cardTitle}>¿Para cuándo prometió pagar? *</Text>
             <View style={s.visitaOpciones}>
@@ -312,8 +412,8 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
           </View>
         )}
 
-        {/* ── Foto (no aplica para abono_previo) ── */}
-        {!sinEvidencia && (
+        {/* ── Foto (solo si algún destino la requiere) ── */}
+        {necesitaFoto && (
           <View style={s.card}>
             <Text style={s.cardTitle}>📷 Foto del hogar *</Text>
             <Text style={s.cardDesc}>Toma una foto del frente de la casa como comprobante de visita.</Text>
@@ -354,10 +454,10 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
           <Text style={[s.inputHint, { textAlign: 'right' }]}>{observaciones.length}/500</Text>
         </View>
 
-        {/* ── Resumen ── */}
-        {resultado && (
-          <View style={[s.resumen, { borderColor: resObj?.color || '#eee' }]}>
-            <Text style={[s.resumenTitulo, { color: resObj?.color }]}>{resObj?.icon} {resObj?.label}</Text>
+        {/* ── Resumen (modo individual) ── */}
+        {!esGrupo && resultado && (
+          <View style={[s.resumen, { borderColor: resObjIndividual?.color || '#eee' }]}>
+            <Text style={[s.resumenTitulo, { color: resObjIndividual?.color }]}>{resObjIndividual?.icon} {resObjIndividual?.label}</Text>
             {foto && <Text style={s.resumenItem}>📷 Foto tomada</Text>}
             {ubicacion && <Text style={s.resumenItem}>📍 Ubicación registrada</Text>}
             {resultado === 'promesa_pago' && (
@@ -367,17 +467,17 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
         )}
 
         {/* ── Avisos de validación (solo cuando se requiere evidencia) ── */}
-        {!sinEvidencia && resultado && !foto && (
+        {necesitaFoto && todosTienenResultado && !foto && (
           <View style={s.avisoFoto}>
             <Text style={s.avisoFotoTxt}>📷 Falta tomar la foto del hogar para poder registrar</Text>
           </View>
         )}
-        {!sinEvidencia && foto && capturandoGps && (
+        {necesitaFoto && foto && capturandoGps && (
           <View style={[s.avisoFoto, { backgroundColor: '#e3f2fd', borderColor: '#90caf9' }]}>
             <Text style={[s.avisoFotoTxt, { color: '#1565C0' }]}>📍 Obteniendo ubicación GPS, espera un momento...</Text>
           </View>
         )}
-        {!sinEvidencia && foto && !capturandoGps && !ubicacion && (
+        {necesitaFoto && foto && !capturandoGps && !ubicacion && (
           <View style={s.avisoFoto}>
             <Text style={s.avisoFotoTxt}>📍 No se pudo obtener la ubicación. Quita la foto y vuelve a tomarla en exteriores.</Text>
           </View>
@@ -432,6 +532,20 @@ const s = StyleSheet.create({
   opcionIcon:  { fontSize: 20, marginRight: 12 },
   opcionLabel: { flex: 1, fontSize: 14, color: '#333' },
   opcionCheck: { fontSize: 16, fontWeight: '800' },
+
+  // Selector por cuenta (modo grupo)
+  miembroBox: { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: '#f0f0f0' },
+  miembroHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  miembroNombre: { fontSize: 13, fontWeight: '800', color: '#1a1a1a' },
+  miembroCuota: { fontSize: 12, fontWeight: '700', color: '#1565C0' },
+  miembroSaldo: { fontSize: 11, color: '#888', marginTop: 2 },
+  chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 7,
+    borderRadius: 20, borderWidth: 1.5, borderColor: '#e0e0e0', backgroundColor: '#fafafa',
+  },
+  chipIcon: { fontSize: 13, marginRight: 5 },
+  chipLabel: { fontSize: 11, color: '#555', fontWeight: '600' },
 
   input: {
     borderWidth: 1.5, borderColor: '#e0e0e0', borderRadius: 10,

@@ -5,6 +5,8 @@ import { startHeartbeat, stopHeartbeat } from '../services/posHeartbeat';
 import { verificarActualizacion } from '../services/updateChecker';
 import { limpiarCacheOffline } from '../services/cobrosOffline';
 import { clearQueue } from '../services/offlineQueue';
+import { registrarPushToken, eliminarPushToken } from '../services/pushNotifications';
+import { removePin } from '../services/appLock';
 
 const AuthContext = createContext();
 const STORAGE_KEY_AUTH = '@miapp/auth';
@@ -60,6 +62,7 @@ export function AuthProvider({ children }) {
           setUser({ ...me, token: stored.token });
           startHeartbeat();
           verificarActualizacion();
+          registrarPushToken();
         } catch {
           clearAuthToken();
           await AsyncStorage.removeItem(STORAGE_KEY_AUTH);
@@ -114,6 +117,7 @@ export function AuthProvider({ children }) {
       await saveAuthData({ user: userData, token: t, email, password });
       startHeartbeat();
       verificarActualizacion(); // no-await: corre en segundo plano sin bloquear login
+      registrarPushToken(); // no-await: idem
       console.log('✅ Login successful');
     } catch (e) {
       console.log('=== LOGIN ERROR ===');
@@ -158,15 +162,20 @@ export function AuthProvider({ children }) {
 
   const logout = async () => {
     stopHeartbeat();
+    await eliminarPushToken();
     try { await api.post('/logout'); } catch { /* ignorar error de red */ }
     clearAuthToken();
     setUser(null);
     setError(null);
-    // Limpiar datos del cobrador anterior para que el siguiente no los vea
+    // Limpiar datos del cobrador anterior para que el siguiente no los vea.
+    // El PIN también es por sesión, no por dispositivo: si no se borra, el
+    // siguiente cobrador que inicie sesión en este mismo teléfono queda
+    // atrapado detrás del PIN de otra persona.
     await Promise.all([
       AsyncStorage.removeItem(STORAGE_KEY_AUTH),
       limpiarCacheOffline(),
       clearQueue(),
+      removePin(),
     ]);
   };
 

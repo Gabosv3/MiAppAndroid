@@ -4,17 +4,23 @@ import {
   ScrollView, ActivityIndicator, Linking, Modal, TextInput, Alert, Platform,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import * as Print from 'expo-print';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import api, { esErrorTransitorio } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import { guardarClienteCache, leerClienteCache, generarNumeroRecibo, encolarPago, guardarEnHistorial, marcarClienteVisitado } from '../services/cobrosOffline';
 import * as offlineQueue from '../services/offlineQueue';
 import * as Location from 'expo-location';
 import { useAuth } from '../context/AuthContext';
-import { fmtFechaCorta } from '../services/dateUtils';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 const initials = (name='') => name.trim().split(/\s+/).slice(0,2).map(w=>w[0]?.toUpperCase()||'').join('');
+
+const METODOS_GRUPO = [
+  { value:'efectivo',      label:'Efectivo',      icon:'💵' },
+  { value:'transferencia', label:'Transferencia', icon:'📲' },
+  { value:'cheque',        label:'Cheque',        icon:'📄' },
+  { value:'deposito',      label:'Depósito',      icon:'🏦' },
+];
 
 export default function DetalleClienteScreen({ navigation, route }) {
   const { clienteId, clienteNombre } = route.params;
@@ -25,6 +31,8 @@ export default function DetalleClienteScreen({ navigation, route }) {
   const [error,        setError]        = useState('');
   const [esCache,      setEsCache]      = useState(false);
   const [updatingUbic,  setUpdatingUbic]  = useState(false);
+  const [modalCoords,   setModalCoords]   = useState(false);
+  const [coordsTexto,   setCoordsTexto]   = useState('');
   const [modalTel,      setModalTel]      = useState(false);
   const [telNormal,     setTelNormal]     = useState('');
   const [telWhatsapp,   setTelWhatsapp]   = useState('');
@@ -47,7 +55,13 @@ export default function DetalleClienteScreen({ navigation, route }) {
   const [buscandoVinc,    setBuscandoVinc]    = useState(false);
   const [vinculando,      setVinculando]      = useState(false);
   const [modalAbonoGrupo, setModalAbonoGrupo] = useState(false);
-  const [montoAbonoGrupo, setMontoAbonoGrupo] = useState('');
+  const [cuentasAbonoGrupo, setCuentasAbonoGrupo] = useState([]); // [{ venta_id, cliente_id, clienteNombre, producto, saldo }]
+  const [montosPorCuenta, setMontosPorCuenta] = useState({}); // { [venta_id]: '12.50' }
+  const [metodoAbonoGrupo, setMetodoAbonoGrupo] = useState('efectivo');
+  const [showMetodosGrupo, setShowMetodosGrupo] = useState(false);
+  const [opcionVisitaGrupo, setOpcionVisitaGrupo] = useState('14'); // '14' | '28' | 'custom'
+  const [fechaVisitaGrupo, setFechaVisitaGrupo] = useState(new Date());
+  const [showDatePickerGrupo, setShowDatePickerGrupo] = useState(false);
   const [procesandoAbono, setProcesandoAbono] = useState(false);
 
   const cargarGrupo = useCallback(async () => {
@@ -138,35 +152,136 @@ export default function DetalleClienteScreen({ navigation, route }) {
     );
   };
 
-  // Reparte el monto ingresado entre las cuentas del grupo (más antigua primero)
-  // y llama al mismo endpoint de pago que usa RegistrarPagoScreen, una vez por cuenta.
-  const abonarATodasLasCuentas = async () => {
-    const monto = parseFloat(montoAbonoGrupo);
-    if (!monto || monto <= 0) {
-      Alert.alert('Monto inválido', 'Ingresa un monto mayor a 0.');
-      return;
-    }
-    if (!grupo?.clientes?.length) return;
+  const pad2 = n => String(n).padStart(2, '0');
+  const dateToStrGrupo = d => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+  const calcProximaVisitaGrupo = () => {
+    if (opcionVisitaGrupo === 'custom') return dateToStrGrupo(fechaVisitaGrupo);
+    const d = new Date();
+    d.setDate(d.getDate() + Number(opcionVisitaGrupo));
+    return dateToStrGrupo(d);
+  };
 
-    // Aplanar todas las cuentas de todos los clientes del grupo, ordenadas por venta_id (más antigua primero)
-    const cuentas = grupo.clientes
+  // Arma la lista de cuentas del grupo (deduplicada por venta_id, más antigua
+  // primero) y prellena cada monto con su saldo pendiente — igual que el
+  // cobro normal, el cobrador puede editar cuánto le abona a cada una.
+  const abrirModalAbonoGrupo = () => {
+    if (!grupo?.clientes?.length) return;
+    const cuentasCrudas = grupo.clientes
       .flatMap(c => (c.cuentas || []).map(cta => ({ ...cta, cliente_id: c.id, clienteNombre: `${c.nombre} ${c.apellido || ''}`.trim() })))
       .sort((a, b) => a.venta_id - b.venta_id);
-
+    const vistos = new Set();
+    const cuentas = cuentasCrudas.filter(cta => {
+      if (vistos.has(cta.venta_id)) return false;
+      vistos.add(cta.venta_id);
+      return true;
+    });
     if (cuentas.length === 0) {
       Alert.alert('Sin cuentas', 'No hay cuentas con saldo pendiente en este grupo.');
       return;
     }
+    setCuentasAbonoGrupo(cuentas);
+    // Arranca en blanco (no con el saldo completo) — el cobrador debe teclear
+    // a propósito cuánto recibió en cada cuenta; si se equivoca, el saldo que
+    // debía queda a la vista al lado para poder corregirlo antes de aplicar.
+    setMontosPorCuenta(Object.fromEntries(cuentas.map(c => [c.venta_id, ''])));
+    setMetodoAbonoGrupo('efectivo');
+    setOpcionVisitaGrupo('14');
+    setFechaVisitaGrupo(new Date());
+    setModalAbonoGrupo(true);
+  };
 
+  // Antes de aplicar, pide confirmación mostrando exactamente qué se va a
+  // cobrar a cada cuenta — igual que el cobro individual normal — para poder
+  // corregir si el cobrador se equivocó de monto antes de que se procese.
+  const confirmarAbonoGrupo = () => {
+    // TODAS las cuentas del grupo entran a la confirmación, no solo las que
+    // tienen monto — la que quede en 0 no se descarta, se registra como que
+    // no abonó (antes desaparecía sin dejar rastro ni salir en el ticket).
+    const cuentasProcesar = cuentasAbonoGrupo
+      .map(cta => ({ ...cta, aPagar: parseFloat(montosPorCuenta[cta.venta_id]) || 0 }));
+
+    const total = cuentasProcesar.reduce((s, c) => s + c.aPagar, 0);
+    const detalle = cuentasProcesar
+      .map(c => `• ${c.clienteNombre}: ${c.aPagar > 0 ? fmt(c.aPagar) : 'No abona'}`)
+      .join('\n');
+    Alert.alert(
+      '¿Confirmar abono grupal?',
+      `${detalle}\n\nTotal: ${fmt(total)}\nMétodo: ${(METODOS_GRUPO.find(m => m.value === metodoAbonoGrupo) || METODOS_GRUPO[0]).label}`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Sí, aplicar', onPress: () => abonarATodasLasCuentas(cuentasProcesar) },
+      ]
+    );
+  };
+
+  // Cada cuenta del grupo se cobra con el monto que el cobrador eligió para
+  // ella específicamente (no un reparto automático) — mismo endpoint y misma
+  // lógica de próxima visita/método que usa el cobro individual normal.
+  const abonarATodasLasCuentas = async (cuentasAPagar) => {
     setProcesandoAbono(true);
-    let restante = monto;
     const aplicados = []; // líneas que sí se cobraron, para el recibo consolidado
     let huboOffline = false;
+    const proxVisita = calcProximaVisitaGrupo();
 
-    for (const cta of cuentas) {
-      if (restante <= 0) break;
-      const aPagar = Math.min(restante, cta.saldo);
-      if (aPagar <= 0) continue;
+    for (const cta of cuentasAPagar) {
+      const aPagar = cta.aPagar;
+
+      // Cuenta en 0: no hay nada que cobrarle hoy, pero no se descarta en
+      // silencio — se registra como visita "sin_pago" (debía y no pagó) para
+      // que quede constancia igual que si se hubiera hecho cuenta por cuenta.
+      if (aPagar <= 0) {
+        const encolarVisitaLocal = async () => {
+          await offlineQueue.enqueueRequest({
+            method: 'POST',
+            url: `/cobros/clientes/${cta.cliente_id}/visita`,
+            label: `Visita ${cta.clienteNombre}`,
+            data: { resultado: 'sin_pago' },
+          });
+          await guardarEnHistorial({
+            clienteId: cta.cliente_id, clienteNombre: cta.clienteNombre,
+            tipo: 'visita', resultadoVisita: 'sin_pago',
+            resultado: { ok: true, mensaje: 'Visita pendiente de envío (offline)' },
+          });
+          await marcarClienteVisitado(cta.cliente_id);
+          return { ok: true, offline: true };
+        };
+
+        let resultadoVisita;
+        if (!isOnline) {
+          resultadoVisita = await encolarVisitaLocal();
+        } else {
+          try {
+            const { data } = await api.post(`/cobros/clientes/${cta.cliente_id}/visita`, { resultado: 'sin_pago' });
+            await guardarEnHistorial({
+              clienteId: cta.cliente_id, clienteNombre: cta.clienteNombre,
+              tipo: 'visita', resultadoVisita: 'sin_pago', resultado: data,
+            });
+            await marcarClienteVisitado(cta.cliente_id);
+            resultadoVisita = { ok: true, offline: false };
+          } catch (e) {
+            resultadoVisita = esErrorTransitorio(e) ? await encolarVisitaLocal() : { ok: false, offline: false };
+          }
+        }
+
+        if (resultadoVisita.offline) huboOffline = true;
+        aplicados.push({
+          clienteNombre: cta.clienteNombre,
+          producto: cta.producto,
+          ventaNumero: cta.venta_numero || cta.venta_id,
+          saldoAntes: cta.saldo,
+          monto: 0,
+          saldoDespues: cta.saldo,
+          numeroRecibo: null,
+          sinPago: true,
+          ok: resultadoVisita.ok,
+        });
+        continue;
+      }
+
+      // Se genera antes del intento online, y se reutiliza si termina
+      // encolado offline — misma protección contra duplicados por timeout
+      // que en el cobro individual normal.
+      const idempotencyKey = `pago-${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
 
       // Aplica el abono a UNA cuenta: si hay conexión intenta online; si no
       // hay conexión o el servidor falla momentáneamente, encola offline en
@@ -174,14 +289,16 @@ export default function DetalleClienteScreen({ navigation, route }) {
       const encolarLocal = async () => {
         const numeroRecibo = await generarNumeroRecibo(user?.id);
         const pagoEncolado = await encolarPago({
+          id: idempotencyKey,
           clienteId: cta.cliente_id, clienteNombre: cta.clienteNombre,
           ventaId: cta.venta_id, ventaNumero: cta.venta_numero || null, numeroRecibo,
-          monto: aPagar, metodo: 'efectivo',
+          monto: aPagar, metodo: metodoAbonoGrupo,
         });
         await guardarEnHistorial({
           clienteId: cta.cliente_id, clienteNombre: cta.clienteNombre,
           ventaNumero: cta.venta_numero || null, numeroRecibo, producto: cta.producto,
-          monto: aPagar, metodo: 'efectivo',
+          monto: aPagar, metodo: metodoAbonoGrupo,
+          proximaVisitaFecha: proxVisita,
           pagoOfflineId: pagoEncolado.id,
           resultado: { ok: true, mensaje: 'Cobro pendiente de envío (offline)', proxima_cuota: null },
         });
@@ -196,8 +313,9 @@ export default function DetalleClienteScreen({ navigation, route }) {
         try {
           const { data } = await api.post(`/cobros/clientes/${cta.cliente_id}/pagar`, {
             monto: aPagar,
-            metodo_pago: 'efectivo',
+            metodo_pago: metodoAbonoGrupo,
             venta_id: cta.venta_id,
+            idempotency_key: idempotencyKey,
           });
           resultado = { numeroRecibo: data?.numero_recibo || null, ok: true, offline: false };
         } catch (e) {
@@ -210,73 +328,32 @@ export default function DetalleClienteScreen({ navigation, route }) {
         clienteNombre: cta.clienteNombre,
         producto: cta.producto,
         ventaNumero: cta.venta_numero || cta.venta_id,
+        saldoAntes: cta.saldo,
         monto: aPagar,
+        saldoDespues: Math.max(0, cta.saldo - aPagar),
         numeroRecibo: resultado.numeroRecibo || null,
         ok: resultado.ok,
       });
-      if (resultado.ok) restante -= aPagar;
     }
 
     setProcesandoAbono(false);
     setModalAbonoGrupo(false);
-    setMontoAbonoGrupo('');
     await cargarGrupo(); // no-op si está offline
     await cargar(); // ya maneja su propio fallback a caché si está offline
 
     const huboExito = aplicados.some(a => a.ok);
     if (huboExito) {
-      await imprimirReciboGrupal({ monto, restante, aplicados });
-      if (huboOffline) {
-        Alert.alert('📴 Algunos abonos quedaron sin conexión', 'Se enviarán automáticamente cuando recuperes la señal.');
-      }
+      // Mismo menú completo que deja el cobro individual normal (reimprimir,
+      // enviar por WhatsApp, volver a ruta, ver cliente) en vez de imprimir
+      // directo y ya.
+      navigation.navigate('AbonoGrupoRegistrado', {
+        aplicados, metodo: metodoAbonoGrupo, proximaVisita: proxVisita, nombreCobrador,
+        clienteId, clienteNombre: cliente?.nombre || clienteNombre,
+        clienteWhatsapp: cliente?.whatsapp || cliente?.telefono || null,
+        huboOffline,
+      });
     } else {
       Alert.alert('Sin aplicar', 'No se pudo aplicar el abono a ninguna cuenta.');
-    }
-  };
-
-  // Recibo consolidado: una línea por cada cuenta abonada + total final.
-  const imprimirReciboGrupal = async ({ monto, restante, aplicados }) => {
-    try {
-      const numeroReciboGrupo = await generarNumeroRecibo(user?.id);
-      const fecha = fmtFechaCorta(new Date());
-      const filasHtml = aplicados.map(a => `
-        <div class="row"><span>${a.ok ? '✔' : '✘'} ${a.clienteNombre}${a.producto ? ` - ${a.producto}` : ''}</span><span>${a.ok ? fmt(a.monto) : 'ERROR'}</span></div>
-        ${a.ok && a.numeroRecibo ? `<div style="font-size:10px;color:#666;padding-left:14px">${a.numeroRecibo}</div>` : ''}
-      `).join('');
-      const totalAplicado = aplicados.filter(a => a.ok).reduce((s, a) => s + a.monto, 0);
-
-      const html = `
-        <html><head>
-          <meta name="viewport" content="width=device-width,initial-scale=1"/>
-          <style>
-            *{box-sizing:border-box;margin:0;padding:0}
-            body{font-family:Arial,Helvetica,sans-serif;width:220px;margin:0 auto;padding:6px 4px;font-size:11px;line-height:1.5;color:#111}
-            .c{text-align:center}
-            .b{font-weight:700}
-            .row{display:flex;justify-content:space-between;align-items:center}
-            .div{border-top:1px solid #999;margin:5px 0}
-            .tot{font-size:14px}
-          </style>
-        </head><body>
-          <div class="c b" style="font-size:14px">DISTRIBUIDORA BM</div>
-          <div class="c">6047-9762</div>
-          <div style="height:8px"></div>
-          <div class="row"><span class="b">${numeroReciboGrupo}</span><span>${fecha}</span></div>
-          <div class="row"><span>Cobrador:</span><span>${nombreCobrador}</span></div>
-          <div class="div"></div>
-          <div class="b">Cuentas abonadas</div>
-          ${filasHtml}
-          <div class="div"></div>
-          <div class="row tot"><span class="b">Total:</span><span class="b">${fmt(totalAplicado)}</span></div>
-          ${restante > 0 ? `<div class="row"><span>Sobrante:</span><span>${fmt(restante)}</span></div>` : ''}
-          <div class="div"></div>
-          <div class="c">Gracias por su pago</div>
-        </body></html>`;
-
-      await Print.printAsync({ html });
-    } catch (e) {
-      console.warn('Error imprimiendo recibo grupal:', e?.message);
-      Alert.alert('Error', 'No se pudo imprimir el recibo grupal.');
     }
   };
 
@@ -303,6 +380,36 @@ export default function DetalleClienteScreen({ navigation, route }) {
 
   useFocusEffect(useCallback(()=>{ setLoading(true); cargar(); },[cargar]));
 
+  // Guarda coordenadas (por GPS o pegadas a mano) — online con caída a la
+  // cola offline, igual que el resto de la app.
+  const guardarCoordenadas = async (lat, lng) => {
+    const guardarOffline = async () => {
+      await offlineQueue.enqueueRequest({
+        method: 'PATCH',
+        url: `/clientes/${clienteId}/ubicacion`,
+        label: `Ubicación de ${clienteNombre}`,
+        data: { latitud: lat, longitud: lng },
+      });
+      Alert.alert(
+        '📍 Ubicación guardada',
+        `Se enviará al servidor cuando recuperes la conexión.\n\nLat: ${lat.toFixed(5)}\nLon: ${lng.toFixed(5)}`
+      );
+    };
+
+    if (isOnline) {
+      try {
+        await api.patch(`/clientes/${clienteId}/ubicacion`, { latitud: lat, longitud: lng });
+        Alert.alert('✅ Ubicación actualizada', `Lat: ${lat.toFixed(5)}\nLon: ${lng.toFixed(5)}`);
+        await cargar();
+      } catch (e) {
+        if (esErrorTransitorio(e)) await guardarOffline();
+        else throw e;
+      }
+    } else {
+      await guardarOffline();
+    }
+  };
+
   const actualizarUbicacion = async () => {
     setUpdatingUbic(true);
     try {
@@ -312,37 +419,42 @@ export default function DetalleClienteScreen({ navigation, route }) {
         return;
       }
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      const lat = pos.coords.latitude;
-      const lng = pos.coords.longitude;
-
-      const guardarOffline = async () => {
-        await offlineQueue.enqueueRequest({
-          method: 'PATCH',
-          url: `/clientes/${clienteId}/ubicacion`,
-          label: `Ubicación de ${clienteNombre}`,
-          data: { latitud: lat, longitud: lng },
-        });
-        Alert.alert(
-          '📍 Ubicación guardada',
-          `Se enviará al servidor cuando recuperes la conexión.\n\nLat: ${lat.toFixed(5)}\nLon: ${lng.toFixed(5)}`
-        );
-      };
-
-      if (isOnline) {
-        try {
-          await api.patch(`/clientes/${clienteId}/ubicacion`, { latitud: lat, longitud: lng });
-          Alert.alert('✅ Ubicación actualizada', `Lat: ${lat.toFixed(5)}\nLon: ${lng.toFixed(5)}`);
-        } catch (e) {
-          if (esErrorTransitorio(e)) await guardarOffline();
-          else throw e;
-        }
-      } else {
-        await guardarOffline();
-      }
+      await guardarCoordenadas(pos.coords.latitude, pos.coords.longitude);
     } catch (e) {
       Alert.alert('Error', e?.message || 'No se pudo obtener la ubicación.');
     } finally {
       setUpdatingUbic(false);
+    }
+  };
+
+  // Extrae lat/lng de lo que sea que pegaron: coordenadas sueltas
+  // ("13.6929, -89.2182"), un link de Google Maps ("?q=13.69,-89.21",
+  // "@13.69,-89.21,17z"), o cualquier texto que las contenga en el medio —
+  // que es como llegan cuando alguien reenvía una ubicación de WhatsApp.
+  const parseCoordenadas = (texto) => {
+    const match = String(texto || '').match(/(-?\d{1,3}\.\d{3,})[,\s]+(-?\d{1,3}\.\d{3,})/);
+    if (!match) return null;
+    const lat = parseFloat(match[1]);
+    const lng = parseFloat(match[2]);
+    if (isNaN(lat) || isNaN(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+    return { lat, lng };
+  };
+
+  const pegarCoordenadas = async () => {
+    const coords = parseCoordenadas(coordsTexto);
+    if (!coords) {
+      Alert.alert('No se pudo leer', 'Pegá las coordenadas o el link de ubicación tal como lo mandaron por WhatsApp (ej. "13.6929, -89.2182").');
+      return;
+    }
+    setUpdatingUbic(true);
+    setModalCoords(false);
+    try {
+      await guardarCoordenadas(coords.lat, coords.lng);
+    } catch (e) {
+      Alert.alert('Error', e?.message || 'No se pudo guardar la ubicación.');
+    } finally {
+      setUpdatingUbic(false);
+      setCoordsTexto('');
     }
   };
 
@@ -581,6 +693,13 @@ export default function DetalleClienteScreen({ navigation, route }) {
             </TouchableOpacity>
           </View>
 
+          <TouchableOpacity
+            style={s.pegarUbicLink}
+            onPress={() => { setCoordsTexto(''); setModalCoords(true); }}
+          >
+            <Text style={s.pegarUbicLinkTxt}>📋 Pegar ubicación que mandaron por WhatsApp</Text>
+          </TouchableOpacity>
+
           {/* ── Resumen stats ── */}
           <View style={s.statsRow}>
             <View style={s.statCard}>
@@ -612,26 +731,47 @@ export default function DetalleClienteScreen({ navigation, route }) {
             <ActivityIndicator size="small" color="#1565C0" style={{ marginBottom: 12 }} />
           ) : grupo && grupo.clientes?.length > 1 ? (
             <View style={s.grupoCard}>
-              {grupo.clientes.map(c => (
-                <View key={c.id} style={[s.grupoItem, c.id === clienteId && s.grupoItemActual]}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.grupoNombre}>{c.nombre} {c.apellido}{c.id === clienteId ? ' (este)' : ''}</Text>
-                    <Text style={s.grupoSaldo}>Saldo: {fmt(c.saldo_total)} · {(c.cuentas||[]).length} cuenta{(c.cuentas||[]).length!==1?'s':''}</Text>
+              {grupo.clientes.map(c => {
+                const sinSaldo = (c.cuentas || []).length === 0 || Number(c.saldo_total) === 0;
+                return (
+                  <View key={c.id} style={[s.grupoItem, c.id === clienteId && s.grupoItemActual]}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.grupoNombre}>{c.nombre} {c.apellido}{c.id === clienteId ? ' (este)' : ''}</Text>
+                      <Text style={s.grupoSaldo}>Saldo: {fmt(c.saldo_total)} · {(c.cuentas||[]).length} cuenta{(c.cuentas||[]).length!==1?'s':''}</Text>
+                      {/* Cuenta sin nada pendiente en este momento — se ofrece
+                          dejar registrada la visita del día sin exigir cobro,
+                          en vez de dejarla fuera de la gestión diaria. */}
+                      {sinSaldo && (
+                        <TouchableOpacity
+                          style={s.visitaSinCobroBtn}
+                          onPress={() => navigation.navigate('RegistrarVisita', {
+                            cliente: {
+                              id: c.id, nombre: `${c.nombre} ${c.apellido || ''}`.trim(),
+                              cuotaMensual: (c.cuentas || []).reduce((s2, ct) => s2 + Number(ct.cuota_mensual || 0), 0),
+                              saldo: c.saldo_total,
+                            },
+                            resultadoInicial: 'sin_saldo',
+                          })}
+                        >
+                          <Text style={s.visitaSinCobroBtnTxt}>💚 Registrar visita sin cobro</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                    {c.id !== clienteId && (
+                      <TouchableOpacity onPress={() => desvincularCliente(c.id, `${c.nombre} ${c.apellido}`)} hitSlop={{top:8,bottom:8,left:8,right:8}}>
+                        <Text style={{ fontSize: 18, color: '#B71C1C' }}>✕</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
-                  {c.id !== clienteId && (
-                    <TouchableOpacity onPress={() => desvincularCliente(c.id, `${c.nombre} ${c.apellido}`)} hitSlop={{top:8,bottom:8,left:8,right:8}}>
-                      <Text style={{ fontSize: 18, color: '#B71C1C' }}>✕</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              ))}
+                );
+              })}
               <View style={s.grupoTotalRow}>
                 <Text style={s.grupoTotalLabel}>Total del grupo</Text>
                 <Text style={s.grupoTotalVal}>{fmt(grupo.saldo_total_grupo)}</Text>
               </View>
               <TouchableOpacity
                 style={s.abonarGrupoBtn}
-                onPress={() => { setMontoAbonoGrupo(''); setModalAbonoGrupo(true); }}
+                onPress={() => { abrirModalAbonoGrupo(); }}
               >
                 <Text style={s.abonarGrupoBtnTxt}>💰 Abonar a todas las cuentas</Text>
               </TouchableOpacity>
@@ -725,7 +865,28 @@ export default function DetalleClienteScreen({ navigation, route }) {
           {/* ── Sin pago / No estaba ── */}
           <TouchableOpacity
             style={s.visitaBtn}
-            onPress={() => navigation.navigate('RegistrarVisita', { cliente: { id: clienteId, nombre: cliente?.nombre } })}
+            onPress={() => navigation.navigate('RegistrarVisita', {
+              cliente: {
+                id: clienteId, nombre: cliente?.nombre,
+                // grupo.clientes siempre trae a este cliente (con o sin grupo
+                // familiar real), así que de ahí sale su cuota mensual sin
+                // pedirla aparte — el cobrador necesita verla al decidir qué
+                // pasó en la visita.
+                cuotaMensual: (grupo?.clientes?.find(c => c.id === clienteId)?.cuentas || [])
+                  .reduce((s2, ct) => s2 + Number(ct.cuota_mensual || 0), 0),
+              },
+              // Si el cliente tiene cuentas vinculadas (grupo familiar), "no
+              // había nadie" aplica a toda la casa — se ofrece registrar la
+              // misma visita para todos de una vez, sin repetir la gestión
+              // cuenta por cuenta.
+              grupoClientes: (grupo?.clientes?.length > 1)
+                ? grupo.clientes.map(c => ({
+                    id: c.id, nombre: `${c.nombre} ${c.apellido || ''}`.trim(),
+                    cuotaMensual: (c.cuentas || []).reduce((s2, ct) => s2 + Number(ct.cuota_mensual || 0), 0),
+                    saldo: c.saldo_total,
+                  }))
+                : null,
+            })}
           >
             <Text style={s.visitaBtnIco}>🚪</Text>
             <View style={{ flex: 1 }}>
@@ -903,31 +1064,132 @@ export default function DetalleClienteScreen({ navigation, route }) {
       {/* Modal abono a todas las cuentas */}
       <Modal visible={modalAbonoGrupo} transparent animationType="slide" onRequestClose={() => setModalAbonoGrupo(false)}>
         <View style={s.modalOverlay}>
-          <View style={s.modalBox}>
+          <View style={[s.modalBox, { maxHeight: '88%' }]}>
             <Text style={s.modalTitle}>💰 Abonar a todas las cuentas</Text>
             <Text style={s.modalSub}>Total del grupo: {fmt(grupo?.saldo_total_grupo)}</Text>
 
-            <Text style={s.modalLabel}>Monto recibido *</Text>
-            <TextInput
-              style={s.modalInput}
-              value={montoAbonoGrupo}
-              onChangeText={setMontoAbonoGrupo}
-              placeholder="Ej: 150.00"
-              keyboardType="numeric"
-              autoFocus
-            />
-            <Text style={{ color: '#888', fontSize: 12, marginTop: 8 }}>
-              El monto se repartirá automáticamente entre las cuentas del grupo, empezando por la más antigua.
-            </Text>
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <Text style={s.modalLabel}>Monto por cuenta</Text>
+              {cuentasAbonoGrupo.map(cta => (
+                <View key={cta.venta_id} style={s.cuentaAbonoRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.cuentaAbonoNombre}>{cta.clienteNombre}</Text>
+                    <Text style={s.cuentaAbonoSub}>
+                      {cta.producto ? `${cta.producto} · ` : ''}Saldo: {fmt(cta.saldo)}
+                    </Text>
+                  </View>
+                  <TextInput
+                    style={s.cuentaAbonoInput}
+                    value={montosPorCuenta[cta.venta_id] ?? ''}
+                    onChangeText={(v) => setMontosPorCuenta(prev => ({ ...prev, [cta.venta_id]: v }))}
+                    placeholder="0.00"
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+              ))}
+
+              <Text style={s.modalLabel}>Método de pago</Text>
+              <TouchableOpacity style={s.selectBtnGrupo} onPress={() => setShowMetodosGrupo(!showMetodosGrupo)}>
+                <Text style={{ fontSize: 16, marginRight: 8 }}>{(METODOS_GRUPO.find(m => m.value === metodoAbonoGrupo) || METODOS_GRUPO[0]).icon}</Text>
+                <Text style={{ flex: 1, fontSize: 14, color: '#1a1a1a' }}>{(METODOS_GRUPO.find(m => m.value === metodoAbonoGrupo) || METODOS_GRUPO[0]).label}</Text>
+                <Text style={{ color: '#aaa', fontSize: 12 }}>{showMetodosGrupo ? '▴' : '▾'}</Text>
+              </TouchableOpacity>
+              {showMetodosGrupo && (
+                <View style={s.dropdownGrupo}>
+                  {METODOS_GRUPO.map(m => (
+                    <TouchableOpacity
+                      key={m.value}
+                      style={s.dropItemGrupo}
+                      onPress={() => { setMetodoAbonoGrupo(m.value); setShowMetodosGrupo(false); }}
+                    >
+                      <Text style={{ fontSize: 16, marginRight: 10 }}>{m.icon}</Text>
+                      <Text style={[{ fontSize: 14, color: '#333' }, m.value === metodoAbonoGrupo && { color: '#1565C0', fontWeight: '700' }]}>{m.label}</Text>
+                      {m.value === metodoAbonoGrupo && <Text style={{ color: '#1565C0', marginLeft: 'auto' }}>✓</Text>}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              <Text style={s.modalLabel}>📅 Próxima visita</Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+                {[
+                  { key: '14', label: '14 días' },
+                  { key: '28', label: '28 días' },
+                  { key: 'custom', label: 'Elegir' },
+                ].map(op => (
+                  <TouchableOpacity
+                    key={op.key}
+                    style={[s.visitaOpcionGrupo, opcionVisitaGrupo === op.key && s.visitaOpcionGrupoOn]}
+                    onPress={() => setOpcionVisitaGrupo(op.key)}
+                  >
+                    <Text style={[s.visitaOpcionGrupoTxt, opcionVisitaGrupo === op.key && { color: '#1565C0', fontWeight: '800' }]}>{op.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {opcionVisitaGrupo === 'custom' && (
+                <>
+                  <TouchableOpacity style={s.dateBtnGrupo} onPress={() => setShowDatePickerGrupo(true)}>
+                    <Text style={{ fontSize: 16, marginRight: 8 }}>📅</Text>
+                    <Text style={{ flex: 1, fontWeight: '700', color: '#1565C0' }}>{dateToStrGrupo(fechaVisitaGrupo)}</Text>
+                  </TouchableOpacity>
+                  {showDatePickerGrupo && (
+                    <DateTimePicker
+                      value={fechaVisitaGrupo}
+                      mode="date"
+                      display="default"
+                      minimumDate={new Date()}
+                      onChange={(_, date) => { setShowDatePickerGrupo(false); if (date) setFechaVisitaGrupo(date); }}
+                    />
+                  )}
+                </>
+              )}
+
+              <View style={s.resumenAbonoGrupo}>
+                <Text style={{ fontWeight: '700', color: '#555' }}>Total a cobrar:</Text>
+                <Text style={{ fontWeight: '900', color: '#2e7d32', fontSize: 16 }}>
+                  {fmt(cuentasAbonoGrupo.reduce((s2, c) => s2 + (parseFloat(montosPorCuenta[c.venta_id]) || 0), 0))}
+                </Text>
+              </View>
+            </ScrollView>
 
             <TouchableOpacity
               style={[s.guardarBtn, procesandoAbono && { opacity: 0.6 }]}
-              onPress={abonarATodasLasCuentas}
+              onPress={confirmarAbonoGrupo}
               disabled={procesandoAbono}
             >
               <Text style={s.guardarBtnTxt}>{procesandoAbono ? 'Procesando...' : '💰 Aplicar abono'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={s.cancelBtn} onPress={() => setModalAbonoGrupo(false)}>
+              <Text style={s.cancelBtnTxt}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal pegar ubicación de WhatsApp */}
+      <Modal visible={modalCoords} transparent animationType="slide" onRequestClose={() => setModalCoords(false)}>
+        <View style={s.modalOverlay}>
+          <View style={s.modalBox}>
+            <Text style={s.modalTitle}>📋 Pegar ubicación</Text>
+            <Text style={s.modalSub}>
+              Pegá el link o las coordenadas tal como llegaron por WhatsApp.
+            </Text>
+            <TextInput
+              style={[s.modalInput, { height: 80, textAlignVertical: 'top' }]}
+              value={coordsTexto}
+              onChangeText={setCoordsTexto}
+              placeholder={'Ej: https://maps.google.com/?q=13.6929,-89.2182\no simplemente: 13.6929, -89.2182'}
+              multiline
+              autoFocus
+            />
+            <TouchableOpacity
+              style={[s.guardarBtn, (!coordsTexto.trim() || updatingUbic) && { opacity: 0.6 }]}
+              onPress={pegarCoordenadas}
+              disabled={!coordsTexto.trim() || updatingUbic}
+            >
+              <Text style={s.guardarBtnTxt}>{updatingUbic ? 'Guardando...' : '✅ Guardar ubicación'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.cancelBtn} onPress={() => setModalCoords(false)}>
               <Text style={s.cancelBtnTxt}>Cancelar</Text>
             </TouchableOpacity>
           </View>
@@ -1027,6 +1289,8 @@ const s = StyleSheet.create({
     elevation:1,
   },
   telBtnTxt:    { color:'#1565C0', fontWeight:'800', fontSize:13, marginTop:4 },
+  pegarUbicLink: { alignSelf: 'center', marginTop: 8, marginBottom: 4 },
+  pegarUbicLinkTxt: { color: '#1565C0', fontSize: 12, fontWeight: '600' },
 
   modalOverlay: { flex:1, backgroundColor:'rgba(0,0,0,0.5)', justifyContent:'flex-end' },
   modalBox:     { backgroundColor:'#fff', borderTopLeftRadius:20, borderTopRightRadius:20, padding:24, paddingBottom:36 },
@@ -1034,6 +1298,18 @@ const s = StyleSheet.create({
   modalSub:     { color:'#888', fontSize:13, marginBottom:16 },
   modalLabel:   { fontSize:13, fontWeight:'700', color:'#555', marginBottom:6, marginTop:12 },
   modalInput:   { borderWidth:1, borderColor:'#ddd', borderRadius:10, padding:12, fontSize:14, color:'#333' },
+  cuentaAbonoRow: { flexDirection:'row', alignItems:'center', gap:10, paddingVertical:8, borderBottomWidth:1, borderBottomColor:'#f0f0f0' },
+  cuentaAbonoNombre: { fontSize:13, fontWeight:'700', color:'#1a1a1a' },
+  cuentaAbonoSub: { fontSize:11, color:'#888', marginTop:2 },
+  cuentaAbonoInput: { width:90, borderWidth:1, borderColor:'#ddd', borderRadius:8, padding:8, fontSize:13, color:'#333', textAlign:'right' },
+  selectBtnGrupo: { flexDirection:'row', alignItems:'center', borderWidth:1.5, borderColor:'#e0e0e0', borderRadius:10, padding:12, marginTop:4, backgroundColor:'#fff' },
+  dropdownGrupo: { borderWidth:1, borderColor:'#e0e0e0', borderRadius:10, marginTop:2, overflow:'hidden', backgroundColor:'#fff' },
+  dropItemGrupo: { flexDirection:'row', alignItems:'center', padding:12, borderBottomWidth:1, borderBottomColor:'#f0f0f0' },
+  visitaOpcionGrupo: { flex:1, borderWidth:1.5, borderColor:'#e0e0e0', borderRadius:10, paddingVertical:10, alignItems:'center', backgroundColor:'#fafafa' },
+  visitaOpcionGrupoOn: { borderColor:'#1565C0', backgroundColor:'#e3f2fd' },
+  visitaOpcionGrupoTxt: { fontSize:13, fontWeight:'700', color:'#555' },
+  dateBtnGrupo: { flexDirection:'row', alignItems:'center', borderWidth:1.5, borderColor:'#1565C0', borderRadius:10, padding:12, marginTop:8, backgroundColor:'#e3f2fd' },
+  resumenAbonoGrupo: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', backgroundColor:'#f5f6fa', borderRadius:10, padding:12, marginTop:16, marginBottom:4 },
   guardarBtn:   { backgroundColor:'#1565C0', borderRadius:12, paddingVertical:14, alignItems:'center', marginTop:20 },
   guardarBtnTxt:{ color:'#fff', fontWeight:'800', fontSize:15 },
   cancelBtn:    { marginTop:10, alignItems:'center', paddingVertical:10 },
@@ -1050,6 +1326,8 @@ const s = StyleSheet.create({
   grupoItemActual: { backgroundColor:'#f3f7fd', borderRadius:8, paddingHorizontal:8 },
   grupoNombre: { color:'#1a1a1a', fontSize:13, fontWeight:'700' },
   grupoSaldo:  { color:'#888', fontSize:11, marginTop:2 },
+  visitaSinCobroBtn: { alignSelf: 'flex-start', marginTop: 6, backgroundColor: '#e8f5e9', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
+  visitaSinCobroBtnTxt: { color: '#2e7d32', fontWeight: '700', fontSize: 11 },
   grupoTotalRow: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', paddingTop:10, marginTop:4 },
   grupoTotalLabel: { color:'#666', fontSize:13, fontWeight:'700' },
   grupoTotalVal: { color:'#1565C0', fontSize:17, fontWeight:'900' },

@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
 import CustomDrawer from '../navigation/CustomDrawerContent';
+import Constants from 'expo-constants';
 import { verificarActualizacion, versionActual } from '../services/updateChecker';
 
 const DIAS = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
@@ -24,6 +25,7 @@ export default function HomeScreen({ navigation }) {
   const { isOnline } = useConnectivity();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [buscandoUpdate, setBuscandoUpdate] = useState(false);
+  const [descargandoPct, setDescargandoPct] = useState(null); // null = no descargando, 0-100 = progreso
   const syncing = useRef(false);
 
   // Auto-sync silencioso: cada vez que vuelve la conexión, envía la cola pendiente
@@ -110,19 +112,21 @@ export default function HomeScreen({ navigation }) {
 
           {/* Versión y botón de actualización */}
           <View style={s.versionRow}>
-            <Text style={s.versionTxt}>v{versionActual()}</Text>
+            <Text style={s.versionTxt}>v{versionActual()} (build {Constants.expoConfig?.android?.versionCode ?? '?'})</Text>
             <TouchableOpacity
               style={[s.updateBtn, buscandoUpdate && s.updateBtnDisabled]}
               disabled={buscandoUpdate}
               onPress={async () => {
                 setBuscandoUpdate(true);
-                await verificarActualizacion({ manual: true });
+                await verificarActualizacion({ manual: true, onDescargando: setDescargandoPct });
                 setBuscandoUpdate(false);
               }}
             >
-              {buscandoUpdate
-                ? <ActivityIndicator size="small" color="#F5A623" />
-                : <Text style={s.updateBtnTxt}>🔄 Buscar actualización</Text>}
+              {descargandoPct !== null
+                ? <Text style={s.updateBtnTxt}>⬇️ Descargando... {descargandoPct}%</Text>
+                : buscandoUpdate
+                  ? <ActivityIndicator size="small" color="#F5A623" />
+                  : <Text style={s.updateBtnTxt}>🔄 Buscar actualización</Text>}
             </TouchableOpacity>
           </View>
         </View>
@@ -169,10 +173,36 @@ export default function HomeScreen({ navigation }) {
           <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700' }}>→</Text>
         </TouchableOpacity>
 
+        {user?.perfil?.es_supervisor && (
+          <TouchableOpacity
+            style={[s.mainBtn, { backgroundColor: '#5E35B1', marginTop: 10 }]}
+            onPress={() => navigation.navigate('RutasSupervisadas')}
+            activeOpacity={0.85}
+          >
+            <Text style={s.mainBtnIcon}>🕵️</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={s.mainBtnLabel}>Rutas que superviso</Text>
+              <Text style={s.mainBtnDesc}>Historial, evaluación y desempeño</Text>
+            </View>
+            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700' }}>→</Text>
+          </TouchableOpacity>
+        )}
+
         {/* Acciones rápidas */}
         <Text style={[s.sectionTitle, { marginTop: 28 }]}>Acciones rápidas</Text>
 
         <View style={s.quickGrid}>
+          {user?.perfil?.es_supervisor && (
+            <TouchableOpacity
+              style={s.quickCard}
+              onPress={() => navigation.navigate('DesempenoCobradores')}
+              activeOpacity={0.85}
+            >
+              <Text style={s.quickIcon}>👥</Text>
+              <Text style={s.quickTitle}>Desempeño cobradores</Text>
+              <Text style={s.quickSub}>Ruta bajo mi cargo</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             style={s.quickCard}
             onPress={() => navigation.navigate('CrearCliente')}
@@ -212,13 +242,53 @@ export default function HomeScreen({ navigation }) {
             <Text style={s.quickTitle}>Mis vales</Text>
             <Text style={s.quickSub}>Ver estado</Text>
           </TouchableOpacity>
+
+          <TouchableOpacity
+            style={s.quickCard}
+            onPress={() => navigation.navigate('DirectorioClientes')}
+            activeOpacity={0.85}
+          >
+            <Text style={s.quickIcon}>📖</Text>
+            <Text style={s.quickTitle}>Enciclopedia</Text>
+            <Text style={s.quickSub}>Directorio de clientes</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={s.quickCard}
+            onPress={() => navigation.navigate('ReporteDiario')}
+            activeOpacity={0.85}
+          >
+            <Text style={s.quickIcon}>📄</Text>
+            <Text style={s.quickTitle}>Reporte diario</Text>
+            <Text style={s.quickSub}>Carta formal de cierre</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={s.quickCard}
+            onPress={() => navigation.navigate('MisPreventas')}
+            activeOpacity={0.85}
+          >
+            <Text style={s.quickIcon}>📝</Text>
+            <Text style={s.quickTitle}>Preventas</Text>
+            <Text style={s.quickSub}>Registrar interés de compra</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={s.quickCard}
+            onPress={() => navigation.navigate('MiDesempeno')}
+            activeOpacity={0.85}
+          >
+            <Text style={s.quickIcon}>📈</Text>
+            <Text style={s.quickTitle}>Mi desempeño</Text>
+            <Text style={s.quickSub}>Cobrado, mora y ruta de hoy</Text>
+          </TouchableOpacity>
         </View>
 
         <View style={{ height: 32 }} />
       </ScrollView>
 
       {drawerOpen && (
-        <CustomDrawer visible={drawerOpen} onClose={() => setDrawerOpen(false)} />
+        <CustomDrawer visible={drawerOpen} onClose={() => setDrawerOpen(false)} navigation={navigation} />
       )}
     </View>
   );

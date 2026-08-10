@@ -115,6 +115,10 @@ export default function RegistrarPagoScreen({ navigation, route }) {
 
   const ejecutarRegistro = async () => {
     setSubmitting(true);
+    // Se genera UNA vez, antes del primer intento, y se reutiliza si termina
+    // encolado offline — así el servidor puede reconocer un reintento del
+    // mismo cobro (ej. tras un timeout) y no crear un segundo recibo.
+    const idempotencyKey = `pago-${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
 
     if (!isOnline) {
       try {
@@ -127,13 +131,14 @@ export default function RegistrarPagoScreen({ navigation, route }) {
         const saldoDespues = Math.max(0, saldoAntes - montoNum);
         const proxVisita = calcProximaVisita();
         const pagoEncolado = await encolarPago({
+          id: idempotencyKey,
           clienteId: cliente.id, clienteNombre: cliente.nombre,
           ventaId, ventaNumero, numeroRecibo,
           monto: montoNum, metodo,
           referencia: referencia.trim(), notas: notas.trim(),
         });
         await guardarEnHistorial({
-          clienteId: cliente.id, clienteNombre: cliente.nombre, clienteCodigo,
+          clienteId: cliente.id, clienteNombre: cliente.nombre, clienteCodigo: codigoCliente,
           clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
           ventaNumero, numeroRecibo, producto, monto: montoNum, metodo,
           proximaVisitaFecha: proxVisita,
@@ -173,6 +178,7 @@ export default function RegistrarPagoScreen({ navigation, route }) {
         monto: montoNum,
         metodo_pago: metodo,
         venta_id: ventaId,
+        idempotency_key: idempotencyKey,
         ...(referencia.trim() && { referencia: referencia.trim() }),
         ...(notas.trim()      && { observaciones: notas.trim() }),
       });
@@ -224,13 +230,14 @@ export default function RegistrarPagoScreen({ navigation, route }) {
               const numeroRecibo = await generarNumeroRecibo(user?.id);
               const proxVisita = calcProximaVisita();
               const pagoEncolado = await encolarPago({
+                id: idempotencyKey,
                 clienteId: cliente.id, clienteNombre: cliente.nombre,
                 ventaId, ventaNumero, numeroRecibo,
                 monto: montoNum, metodo,
                 referencia: referencia.trim(), notas: notas.trim(),
               });
               await guardarEnHistorial({
-                clienteId: cliente.id, clienteNombre: cliente.nombre, clienteCodigo,
+                clienteId: cliente.id, clienteNombre: cliente.nombre, clienteCodigo: codigoCliente,
                 clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
                 ventaNumero, numeroRecibo, producto, monto: montoNum, metodo,
                 proximaVisitaFecha: proxVisita,
