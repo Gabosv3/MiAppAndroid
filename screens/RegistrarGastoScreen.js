@@ -5,9 +5,10 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import api, { esErrorTransitorio } from '../services/api';
+import api, { esErrorTransitorio, TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const CATEGORIAS_VEHICULO = [
   { value: 'gasolina',   label: 'Gasolina',   icon: '⛽' },
@@ -32,7 +33,7 @@ export default function RegistrarGastoScreen({ navigation }) {
     if (!isOnline) return;
     setLoadingVehiculos(true);
     try {
-      const { data } = await api.get('/vehiculos/disponibles');
+      const { data } = await api.get('/vehiculos/disponibles', { timeout: TIMEOUT_LECTURA_CACHE });
       setVehiculos(Array.isArray(data) ? data : []);
     } catch { setVehiculos([]); }
     finally { setLoadingVehiculos(false); }
@@ -44,38 +45,33 @@ export default function RegistrarGastoScreen({ navigation }) {
     setTipo(t);
     setVehiculoId(null);
     setCategoriaVehiculo(null);
+    setComprobante(null);
     if (t === 'vehiculo') cargarVehiculos();
   };
 
   const tomarFoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permiso de cámara requerido', 'Habilita el acceso a la cámara para esta app.');
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.75, allowsEditing: false });
-    if (!result.canceled && result.assets?.length > 0) {
-      const a = result.assets[0];
-      setComprobante({ uri: a.uri, type: a.mimeType || 'image/jpeg', name: 'comprobante.jpg' });
-    }
-  };
-
-  const elegirDeGaleria = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permiso requerido', 'Habilita el acceso a la galería.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.75, mediaTypes: ImagePicker.MediaTypeOptions.Images });
-    if (!result.canceled && result.assets?.length > 0) {
-      const a = result.assets[0];
-      setComprobante({ uri: a.uri, type: a.mimeType || 'image/jpeg', name: 'comprobante.jpg' });
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso de cámara requerido', 'Habilita el acceso a la cámara para esta app.');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({ quality: 0.75, allowsEditing: false });
+      if (!result.canceled && result.assets?.length > 0) {
+        const a = result.assets[0];
+        setComprobante({ uri: a.uri, type: a.mimeType || 'image/jpeg', name: 'comprobante.jpg' });
+      }
+    } catch (e) {
+      Alert.alert('Error', 'No se pudo abrir la cámara: ' + (e?.message || String(e)));
     }
   };
 
   const montoNum = parseFloat(monto) || 0;
   const esVehiculo = tipo === 'vehiculo';
-  const puedeEnviar = !!tipo && montoNum >= 0.01 && !!comprobante &&
+  // Consumo (almuerzo, refrigerio) queda preaprobado directo con solo el
+  // monto — no exige foto. Vehículo sí, porque es aprobación manual y de
+  // montos más grandes (gasolina, imprevistos).
+  const puedeEnviar = !!tipo && montoNum >= 0.01 && (!esVehiculo || !!comprobante) &&
     (!esVehiculo || (vehiculoId && categoriaVehiculo)) && !submitting;
 
   const limpiar = () => {
@@ -87,9 +83,15 @@ export default function RegistrarGastoScreen({ navigation }) {
     if (!puedeEnviar) return;
     setSubmitting(true);
 
+    // Generada una vez, antes del primer intento, y reutilizada si el vale
+    // termina encolado offline — así el servidor reconoce un reintento tras
+    // timeout y no descuenta el gasto dos veces de la caja del día.
+    const idempotencyKey = `vale-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
     const campos = {
       tipo,
       monto: montoNum.toFixed(2),
+      idempotency_key: idempotencyKey,
       ...(descripcion.trim() && { descripcion: descripcion.trim() }),
       ...(esVehiculo && { vehiculo_id: vehiculoId, categoria_vehiculo: categoriaVehiculo }),
     };
@@ -100,7 +102,7 @@ export default function RegistrarGastoScreen({ navigation }) {
         url: '/vales',
         label: `Vale ${tipo === 'vehiculo' ? categoriaVehiculo : 'consumo'} $${montoNum.toFixed(2)}`,
         useFormData: true,
-        data: { ...campos, comprobante },
+        data: { ...campos, ...(comprobante && { comprobante }) },
       });
       Alert.alert(
         '📴 Guardado sin conexión',
@@ -114,10 +116,16 @@ export default function RegistrarGastoScreen({ navigation }) {
         try {
           const formData = new FormData();
           Object.entries(campos).forEach(([k, v]) => formData.append(k, String(v)));
-          formData.append('comprobante', { uri: comprobante.uri, name: comprobante.name, type: comprobante.type });
+          if (comprobante) {
+            formData.append('comprobante', { uri: comprobante.uri, name: comprobante.name, type: comprobante.type });
+          }
 
           await api.post('/vales', formData, { timeout: 30000, headers: { 'Content-Type': 'multipart/form-data' } });
-          Alert.alert('✅ Vale enviado', 'Queda pendiente de aprobación.', [{ text: 'OK', onPress: () => { limpiar(); navigation.goBack(); } }]);
+          Alert.alert(
+            esVehiculo ? '✅ Vale enviado' : '✅ Vale aprobado',
+            esVehiculo ? 'Queda pendiente de aprobación.' : 'Se aprobó automáticamente.',
+            [{ text: 'OK', onPress: () => { limpiar(); navigation.goBack(); } }]
+          );
         } catch (e) {
           if (e?.response?.status === 403) {
             Alert.alert('Vehículo no disponible', e.response.data?.mensaje || 'Este vehículo ya no te pertenece ni está disponible como reserva.');
@@ -141,13 +149,14 @@ export default function RegistrarGastoScreen({ navigation }) {
     }
   };
 
+  const insets = useSafeAreaInsets();
   const s = styles();
 
   return (
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
 
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Text style={s.backArrow}>←</Text>
         </TouchableOpacity>
@@ -260,11 +269,11 @@ export default function RegistrarGastoScreen({ navigation }) {
           </View>
         )}
 
-        {/* ── Foto comprobante ── */}
-        {tipo && (
+        {/* ── Foto comprobante (solo vehículo — consumo se aprueba directo con el monto) ── */}
+        {esVehiculo && (
           <View style={s.card}>
             <Text style={s.cardTitle}>📷 Foto del comprobante *</Text>
-            <Text style={s.cardDesc}>Obligatoria — factura, recibo o ticket del gasto.</Text>
+            <Text style={s.cardDesc}>Obligatoria, tomada al momento — factura, recibo o ticket del gasto.</Text>
             {comprobante ? (
               <View style={{ alignItems: 'center' }}>
                 <Image source={{ uri: comprobante.uri }} style={s.fotoPreview} resizeMode="cover" />
@@ -273,16 +282,10 @@ export default function RegistrarGastoScreen({ navigation }) {
                 </TouchableOpacity>
               </View>
             ) : (
-              <View style={{ flexDirection: 'row', gap: 10 }}>
-                <TouchableOpacity style={[s.fotoBtnGrande, { flex: 1 }]} onPress={tomarFoto} activeOpacity={0.8}>
-                  <Text style={s.fotoBtnGrandeIco}>📷</Text>
-                  <Text style={s.fotoBtnGrandeTxt}>Cámara</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[s.fotoBtnGrande, { flex: 1 }]} onPress={elegirDeGaleria} activeOpacity={0.8}>
-                  <Text style={s.fotoBtnGrandeIco}>🖼️</Text>
-                  <Text style={s.fotoBtnGrandeTxt}>Galería</Text>
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity style={s.fotoBtnGrande} onPress={tomarFoto} activeOpacity={0.8}>
+                <Text style={s.fotoBtnGrandeIco}>📷</Text>
+                <Text style={s.fotoBtnGrandeTxt}>Tomar foto</Text>
+              </TouchableOpacity>
             )}
           </View>
         )}
@@ -321,7 +324,8 @@ const styles = () => StyleSheet.create({
   root:   { flex: 1, backgroundColor: '#f5f6fa' },
   header: {
     backgroundColor: '#1565C0', flexDirection: 'row', alignItems: 'center',
-    paddingTop: (StatusBar.currentHeight || 0) + 8, paddingBottom: 16, paddingHorizontal: 16, gap: 12,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom: 16, paddingHorizontal: 16, gap: 12,
   },
   backBtn:    { paddingRight: 4 },
   backArrow:  { color: '#fff', fontSize: 24 },

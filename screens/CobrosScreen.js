@@ -1,15 +1,18 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, StatusBar,
-  RefreshControl, ActivityIndicator, TextInput, FlatList, Platform, Alert,
+  RefreshControl, ActivityIndicator, TextInput, FlatList, Platform, Alert, ScrollView,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import api from '../services/api';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import api, { TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import {
   guardarRutaCache, leerRutaCache, contarPagosPendientes, sincronizarPagosPendientes,
   guardarOrdenClientes, leerOrdenClientes, leerClientesVisitadosHoy,
+  guardarClientesCacheBatch,
 } from '../services/cobrosOffline';
+import { useBusquedaPorVoz } from '../hooks/useBusquedaPorVoz';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
@@ -18,6 +21,7 @@ const avatarColor = (name = '') => AVATAR_COLORS[(name.charCodeAt(0) || 0) % AVA
 const initials    = (name = '') => name.trim().split(/\s+/).slice(0,2).map(w=>w[0]?.toUpperCase()||'').join('');
 
 export default function CobrosScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const [rutas,    setRutas]    = useState([]);
   const [dia,      setDia]      = useState('');
   const [loading,  setLoading]  = useState(true);
@@ -52,17 +56,65 @@ export default function CobrosScreen({ navigation }) {
     );
   }, []);
 
+  // Respaldo offline de cada cliente de la ruta — antes solo se guardaba la
+  // primera vez que el cobrador abría el detalle de ESE cliente estando en
+  // línea. Si se quedaba sin señal antes de haberlo abierto (muy común al
+  // inicio del día, con rutas de 80-100 clientes), no había nada que
+  // mostrarle offline. Ahora, apenas carga la ruta del día, se deja un
+  // respaldo básico para TODOS de una vez — no tan completo como el detalle
+  // real (falta el nombre del producto y el desglose de cuotas por venta,
+  // que solo trae /cobros/clientes/{id}), pero sí trae nombre, saldo y
+  // ventas con su pendiente, mejor que una pantalla vacía. No pisa un
+  // respaldo ya existente por si ese cliente ya tiene el detalle completo
+  // guardado de una visita anterior.
+  const precachearClientesDeRuta = useCallback(async (rutasData) => {
+    const clientes = (rutasData || []).flatMap(r => r.clientes || []);
+    // Una sola lectura + una sola escritura para TODOS los clientes, no una
+    // por cliente — con 80-130 clientes en la ruta, hacerlo uno por uno en
+    // paralelo (como antes) disparaba esa misma cantidad de lecturas y
+    // escrituras del almacenamiento del teléfono al mismo tiempo, lo que
+    // sentía la app lenta justo al abrir Cobros y de paso podía perder
+    // datos por condición de carrera (varias escrituras pisándose entre sí).
+    const entradas = clientes.map(c => ({
+      clienteId: c.id,
+      data: {
+        cliente: {
+          id: c.id,
+          nombre: c.nombre,
+          dui: c.dui,
+          codigo_anterior: c.codigo_anterior,
+          telefono: c.telefono,
+          saldo_total: c.saldo_total,
+        },
+        resumen: null,
+        ventas: (c.ventas || []).map(v => ({
+          id: v.id,
+          numero_venta: v.numero_venta,
+          fecha_venta: v.fecha_venta,
+          total: v.total,
+          monto_pagado: v.monto_pagado,
+          saldo_pendiente: v.saldo_pendiente,
+          resumen: { pendientes: v.cuotas_pendientes, vencidas: v.cuotas_vencidas },
+        })),
+      },
+    }));
+    await guardarClientesCacheBatch(entradas);
+  }, []);
+
   const cargar = useCallback(async () => {
     try {
       setError('');
       if (isOnline) {
-        const { data } = await api.get('/cobros/ruta-hoy');
+        const { data } = await api.get('/cobros/ruta-hoy', { timeout: TIMEOUT_LECTURA_CACHE });
         await guardarRutaCache(data);
         setDia(data.dia || '');
         setRutas(data.rutas || []);
         if ((data.rutas||[]).length === 1) setRutaId(data.rutas[0].id);
         setEsCache(false);
         setCacheVieja(false);
+        // No se espera (no-await) — no debe retrasar que la pantalla muestre
+        // la ruta; corre en segundo plano.
+        precachearClientesDeRuta(data.rutas);
         const pendientes = await contarPagosPendientes();
         if (pendientes > 0) {
           const result = await sincronizarPagosPendientes(api);
@@ -93,7 +145,7 @@ export default function CobrosScreen({ navigation }) {
         setError(e?.message || 'Error');
       }
     } finally { setLoading(false); setRefreshing(false); }
-  }, [isOnline]);
+  }, [isOnline, precachearClientesDeRuta]);
 
   useFocusEffect(useCallback(() => {
     setLoading(true);
@@ -219,6 +271,11 @@ export default function CobrosScreen({ navigation }) {
     setQuery(text);
     setResultadosGlobal(null);
   };
+
+  // Búsqueda por voz — para cuando el cobrador tiene las manos ocupadas
+  // (cargando producto, contando efectivo, etc.). El resultado reconocido
+  // se mete directo al mismo buscador de siempre, no es un camino aparte.
+  const { escuchando, iniciar: iniciarBusquedaVoz } = useBusquedaPorVoz(handleQueryChange);
 
   const entrarReorden = () => {
     setQuery('');
@@ -360,7 +417,7 @@ export default function CobrosScreen({ navigation }) {
   if (loading) return (
     <View style={{flex:1,backgroundColor:'#f5f6fa'}}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0"/>
-      <View style={s.header}/>
+      <View style={[s.header, { paddingTop: insets.top + 12 }]}/>
       <View style={{flex:1,alignItems:'center',justifyContent:'center'}}>
         <ActivityIndicator size="large" color="#1565C0"/>
         <Text style={{color:'#888',marginTop:12}}>Cargando ruta del día...</Text>
@@ -373,7 +430,7 @@ export default function CobrosScreen({ navigation }) {
       <StatusBar barStyle="light-content" backgroundColor={modoReorden ? '#e65100' : '#1565C0'}/>
 
       {/* ── HEADER ── */}
-      <View style={[s.header, modoReorden && s.headerReorden]}>
+      <View style={[s.header, { paddingTop: insets.top + 12 }, modoReorden && s.headerReorden]}>
         <View style={s.headerContent}>
           <View>
             <Text style={s.headerTitle}>{modoReorden ? 'Reordenar' : 'Cobros'}</Text>
@@ -453,7 +510,18 @@ export default function CobrosScreen({ navigation }) {
         <>
           {/* Filtros de ruta (ocultos en modo reordenar) */}
           {!modoReorden && rutas.length > 1 && (
-            <View style={s.rutaBar}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={s.rutaBar}
+              // flexGrow:1 + justifyContent:'space-between' — cuando los
+              // chips caben todos en la pantalla (pocas rutas), se reparten
+              // parejo llenando el ancho en vez de quedar amontonados a la
+              // izquierda con un hueco vacío a la derecha. Cuando no caben
+              // (muchas rutas), el contenido simplemente se desborda y hace
+              // scroll normal — space-between no tiene efecto ahí.
+              contentContainerStyle={[s.rutaBarContent, { flexGrow: 1, justifyContent: 'space-between' }]}
+            >
               <TouchableOpacity
                 style={[s.rutaChip, rutaId===null && s.rutaChipOn]}
                 onPress={() => setRutaId(null)}
@@ -469,7 +537,7 @@ export default function CobrosScreen({ navigation }) {
                   <Text style={[s.rutaChipTxt, rutaId===r.id && s.rutaChipTxtOn]}>{r.nombre}</Text>
                 </TouchableOpacity>
               ))}
-            </View>
+            </ScrollView>
           )}
 
           {/* Buscador (oculto en modo reordenar) */}
@@ -488,7 +556,18 @@ export default function CobrosScreen({ navigation }) {
                   <Text style={{fontSize:16,color:'#aaa'}}>✕</Text>
                 </TouchableOpacity>
               )}
+              <TouchableOpacity
+                onPress={iniciarBusquedaVoz}
+                disabled={escuchando}
+                hitSlop={{top:8,bottom:8,left:8,right:8}}
+                style={{marginLeft:10}}
+              >
+                <Text style={{fontSize:18}}>{escuchando ? '🔴' : '🎤'}</Text>
+              </TouchableOpacity>
             </View>
+          )}
+          {escuchando && (
+            <Text style={s.escuchandoTxt}>🎙️ Escuchando... di el nombre o código del cliente</Text>
           )}
 
           {/* Contador */}
@@ -509,58 +588,69 @@ export default function CobrosScreen({ navigation }) {
                 ? <RefreshControl refreshing={refreshing} onRefresh={()=>{setRefreshing(true);cargar();}} colors={['#1565C0']}/>
                 : undefined
             }
+            ListHeaderComponent={
+              // Buscar en todas mis rutas — visible siempre que haya texto de
+              // búsqueda, no solo cuando la ruta actual no tiene coincidencias.
+              // Un código puede coincidir parcialmente con un cliente de la
+              // ruta de hoy (ej. "8788" dentro de otro código) sin ser el
+              // cliente que el cobrador busca, y ese en realidad está en otra
+              // ruta. Va como ListHeaderComponent (no una View aparte encima
+              // del FlatList) para que TODO se desplace junto — antes, con
+              // muchos resultados globales, no había forma de bajar ni para
+              // verlos todos ni para llegar al resto de la lista.
+              (query.trim().length > 0 && isOnline) ? (
+                <View style={{paddingHorizontal:16, marginBottom:8}}>
+                  {resultadosGlobal === null ? (
+                    <TouchableOpacity
+                      style={s.buscarGlobalBtn}
+                      onPress={buscarEnTodasLasRutas}
+                      disabled={buscandoGlobal}
+                    >
+                      {buscandoGlobal
+                        ? <ActivityIndicator size="small" color="#1565C0" />
+                        : <Text style={s.buscarGlobalTxt}>🌐 Buscar en todas mis rutas</Text>}
+                    </TouchableOpacity>
+                  ) : resultadosGlobal.length === 0 ? (
+                    <Text style={{color:'#aaa', textAlign:'center', marginTop:4}}>No se encontró en ninguna otra ruta</Text>
+                  ) : (
+                    <View style={{width:'100%', marginTop:4}}>
+                      <Text style={{color:'#666',fontSize:12,fontWeight:'700',marginBottom:8}}>
+                        ENCONTRADO EN OTRAS RUTAS ({resultadosGlobal.length})
+                      </Text>
+                      {resultadosGlobal.map(c => {
+                        const color = avatarColor(c.nombre);
+                        return (
+                          <TouchableOpacity
+                            key={c.id}
+                            style={s.globalCard}
+                            onPress={() => navigation.navigate('DetalleCliente', { clienteId: c.id, clienteNombre: c.nombre })}
+                          >
+                            <View style={[s.avatar, {backgroundColor: color, width:40, height:40, borderRadius:20}]}>
+                              <Text style={s.avatarTxt}>{initials(c.nombre)}</Text>
+                            </View>
+                            <View style={{flex:1,marginLeft:12}}>
+                              <Text style={{fontSize:14,fontWeight:'700',color:'#1a1a1a'}}>{c.nombre}</Text>
+                              <Text style={{fontSize:12,color:'#888'}}>
+                                Código: {c.codigo_anterior}  ·  {c.ruta?.nombre}
+                              </Text>
+                              {c.telefono ? <Text style={{fontSize:12,color:'#aaa'}}>Tel: {c.telefono}</Text> : null}
+                            </View>
+                            <View style={{alignItems:'flex-end'}}>
+                              <Text style={{fontSize:13,fontWeight:'800',color:'#e53e3e'}}>{fmt(c.saldo_total)}</Text>
+                              <Text style={{fontSize:10,color:'#aaa',marginTop:2}}>{c.ruta?.dia_semana}</Text>
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+              ) : null
+            }
             ListEmptyComponent={
               <View style={{alignItems:'center',paddingVertical:40,paddingHorizontal:16}}>
                 <Text style={{fontSize:44,marginBottom:10}}>🔍</Text>
                 <Text style={{fontSize:15,fontWeight:'700',color:'#444'}}>Sin resultados en la ruta de hoy</Text>
-                {query.trim().length > 0 && isOnline && (
-                  <>
-                    {resultadosGlobal === null ? (
-                      <TouchableOpacity
-                        style={s.buscarGlobalBtn}
-                        onPress={buscarEnTodasLasRutas}
-                        disabled={buscandoGlobal}
-                      >
-                        {buscandoGlobal
-                          ? <ActivityIndicator size="small" color="#1565C0" />
-                          : <Text style={s.buscarGlobalTxt}>🌐 Buscar en todas mis rutas</Text>}
-                      </TouchableOpacity>
-                    ) : resultadosGlobal.length === 0 ? (
-                      <Text style={{color:'#aaa',marginTop:12}}>No se encontró en ninguna ruta</Text>
-                    ) : (
-                      <View style={{width:'100%',marginTop:16}}>
-                        <Text style={{color:'#666',fontSize:12,fontWeight:'700',marginBottom:8}}>
-                          ENCONTRADO EN OTRAS RUTAS ({resultadosGlobal.length})
-                        </Text>
-                        {resultadosGlobal.map(c => {
-                          const color = avatarColor(c.nombre);
-                          return (
-                            <TouchableOpacity
-                              key={c.id}
-                              style={s.globalCard}
-                              onPress={() => navigation.navigate('DetalleCliente', { clienteId: c.id, clienteNombre: c.nombre })}
-                            >
-                              <View style={[s.avatar, {backgroundColor: color, width:40, height:40, borderRadius:20}]}>
-                                <Text style={s.avatarTxt}>{initials(c.nombre)}</Text>
-                              </View>
-                              <View style={{flex:1,marginLeft:12}}>
-                                <Text style={{fontSize:14,fontWeight:'700',color:'#1a1a1a'}}>{c.nombre}</Text>
-                                <Text style={{fontSize:12,color:'#888'}}>
-                                  Código: {c.codigo_anterior}  ·  {c.ruta?.nombre}
-                                </Text>
-                                {c.telefono ? <Text style={{fontSize:12,color:'#aaa'}}>Tel: {c.telefono}</Text> : null}
-                              </View>
-                              <View style={{alignItems:'flex-end'}}>
-                                <Text style={{fontSize:13,fontWeight:'800',color:'#e53e3e'}}>{fmt(c.saldo_total)}</Text>
-                                <Text style={{fontSize:10,color:'#aaa',marginTop:2}}>{c.ruta?.dia_semana}</Text>
-                              </View>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
-                    )}
-                  </>
-                )}
               </View>
             }
           />
@@ -574,7 +664,9 @@ const s = StyleSheet.create({
   root: { flex:1, backgroundColor:'#f5f6fa' },
   header: {
     backgroundColor:'#1565C0',
-    paddingTop: (StatusBar.currentHeight||0) + 12,
+    // paddingTop real (insets.top) se aplica inline en el render — este es
+    // solo un valor de respaldo mientras se calculan los insets.
+    paddingTop: 32,
     paddingBottom: 20,
     paddingHorizontal: 20,
   },
@@ -599,10 +691,25 @@ const s = StyleSheet.create({
   bannerPicked: { backgroundColor:'#f3e5f5', borderBottomColor:'#ce93d8' },
   retryBtn:    { backgroundColor:'#1565C0', borderRadius:10, paddingHorizontal:32, paddingVertical:12 },
   retryTxt:    { color:'#fff', fontWeight:'700', fontSize:14 },
-  rutaBar:     { flexDirection:'row', backgroundColor:'#fff', paddingHorizontal:16, paddingVertical:10, gap:8, borderBottomWidth:1, borderBottomColor:'#eee' },
-  rutaChip:    { paddingHorizontal:14, paddingVertical:6, borderRadius:20, backgroundColor:'#f0f0f0', borderWidth:1.5, borderColor:'#e0e0e0' },
+  // Alto fijo — sin esto, un ScrollView horizontal con contenido en fila a
+  // veces mide mal en Android y termina colapsado a casi 0 de alto (se ve
+  // como una rayita de color sin texto, aunque el código de los chips esté
+  // bien). Con altura explícita, Android ya no tiene que "adivinar".
+  rutaBar:     { height: 68, backgroundColor:'#fff', borderBottomWidth:1, borderBottomColor:'#eee' },
+  rutaBarContent: { flexDirection:'row', alignItems:'center', paddingHorizontal:16, paddingVertical:14, gap:10 },
+  rutaChip:    {
+    height: 44, minWidth: 64, paddingHorizontal:18, borderRadius:22, backgroundColor:'#f0f0f0',
+    borderWidth:1.5, borderColor:'#e0e0e0',
+    alignItems: 'center', justifyContent: 'center',
+    // Dentro del ScrollView horizontal, sin esto los chips se comprimían y
+    // el texto del nombre de la ruta no se veía — flexShrink:0 los deja con
+    // su ancho natural según el texto, en vez de encogerse para caber.
+    // Además de altura explícita en el chip (no solo en la barra), para que
+    // Android no vuelva a colapsarlo a una rayita sin texto visible.
+    flexShrink: 0, alignSelf: 'center',
+  },
   rutaChipOn:  { backgroundColor:'#e3f2fd', borderColor:'#1565C0' },
-  rutaChipTxt: { color:'#888', fontSize:12, fontWeight:'600' },
+  rutaChipTxt: { color:'#888', fontSize:13, fontWeight:'600', flexShrink: 0 },
   rutaChipTxtOn:{ color:'#1565C0' },
   searchBox:   {
     flexDirection:'row', alignItems:'center', backgroundColor:'#fff',
@@ -613,6 +720,7 @@ const s = StyleSheet.create({
   },
   searchIcon:  { fontSize:16, marginRight:8 },
   searchInput: { flex:1, fontSize:14, color:'#222', paddingVertical:12 },
+  escuchandoTxt: { color:'#c62828', fontSize:12, fontWeight:'700', textAlign:'center', marginTop:6 },
   countTxt:    { color:'#999', fontSize:12, marginHorizontal:18, marginBottom:8, marginTop: 6 },
 
   /* ── Card normal ── */

@@ -1,8 +1,11 @@
 import React, { useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import api from '../services/api';
+import api, { TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
+import { useAuth } from '../context/AuthContext';
+import { leerPagosPendientes } from '../services/cobrosOffline';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
@@ -25,10 +28,19 @@ const Comparativa = ({ actual, anterior }) => {
 };
 
 export default function MiDesempenoScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const { isOnline } = useConnectivity();
-  const [datos, setDatos] = useState(null);
+  const { user } = useAuth();
+  // El perfil (qué roles operativos tiene) ya viene cacheado en el usuario
+  // desde /me al iniciar sesión — no hace falta pedirlo aparte.
+  const esVendedor = !!user?.perfil?.es_vendedor;
+  const esCobrador = !!user?.perfil?.es_cobrador;
+
+  const [datosCobro, setDatosCobro] = useState(null);
+  const [datosVenta, setDatosVenta] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [cobrosPend, setCobrosPend] = useState(0);
 
   const cargar = useCallback(async () => {
     if (!isOnline) {
@@ -36,24 +48,42 @@ export default function MiDesempenoScreen({ navigation }) {
       setLoading(false);
       return;
     }
+    if (!esVendedor && !esCobrador) {
+      setError('Tu cuenta no tiene un perfil de vendedor ni de cobrador activo.');
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError('');
     try {
-      const { data } = await api.get('/cobros/desempeno');
-      setDatos(data);
-    } catch (e) {
-      setError(e?.response?.data?.mensaje || 'No se pudo cargar tu desempeño.');
+      // Cada endpoint se pide solo si aplica — y uno que falle no tumba al
+      // otro (ej. es vendedor pero sin asignación activa hoy no debería
+      // ocultar los datos de cobro si también es cobrador).
+      const [resCobro, resVenta] = await Promise.allSettled([
+        esCobrador ? api.get('/cobros/desempeno', { timeout: TIMEOUT_LECTURA_CACHE }) : Promise.resolve(null),
+        esVendedor ? api.get('/ventas/desempeno', { timeout: TIMEOUT_LECTURA_CACHE }) : Promise.resolve(null),
+      ]);
+
+      if (resCobro.status === 'fulfilled' && resCobro.value) setDatosCobro(resCobro.value.data);
+      if (resVenta.status === 'fulfilled' && resVenta.value) setDatosVenta(resVenta.value.data);
+
+      if (resCobro.status === 'rejected' && resVenta.status === 'rejected') {
+        setError('No se pudo cargar tu desempeño.');
+      }
     } finally {
       setLoading(false);
     }
-  }, [isOnline]);
+  }, [isOnline, esVendedor, esCobrador]);
 
-  useFocusEffect(useCallback(() => { cargar(); }, [cargar]));
+  useFocusEffect(useCallback(() => {
+    cargar();
+    leerPagosPendientes().then(p => setCobrosPend(p.length));
+  }, [cargar]));
 
   return (
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Text style={s.backArrow}>←</Text>
         </TouchableOpacity>
@@ -69,34 +99,81 @@ export default function MiDesempenoScreen({ navigation }) {
         </View>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
-          <View style={s.card}>
-            <Text style={s.cardTitle}>📅 Cobrado esta semana</Text>
-            <Text style={s.montoGrande}>{fmt(datos.cobrado_semana_actual)}</Text>
-            <Comparativa actual={datos.cobrado_semana_actual} anterior={datos.cobrado_semana_pasada} />
-          </View>
-
-          <View style={s.card}>
-            <Text style={s.cardTitle}>🗓️ Cobrado este mes</Text>
-            <Text style={s.montoGrande}>{fmt(datos.cobrado_mes_actual)}</Text>
-            <Comparativa actual={datos.cobrado_mes_actual} anterior={datos.cobrado_mes_pasado} />
-          </View>
-
-          <View style={s.row}>
-            <View style={[s.card, s.cardMitad]}>
-              <Text style={s.cardTitle}>🚶 Ruta de hoy</Text>
-              <Text style={s.montoMediano}>
-                {datos.gestionados_hoy}/{datos.clientes_ruta_hoy}
+          {cobrosPend > 0 && (
+            <View style={s.pendBanner}>
+              <Text style={s.pendTxt}>
+                ⚠️ Tienes {cobrosPend} cobro{cobrosPend !== 1 ? 's' : ''} guardado{cobrosPend !== 1 ? 's' : ''} en este teléfono que todavía NO está{cobrosPend !== 1 ? 'n' : ''} en estos totales — no llegó al servidor. Súmalo aparte al efectivo que entregues.
               </Text>
-              <Text style={s.cardSub}>cuentas gestionadas</Text>
             </View>
-            <View style={[s.card, s.cardMitad]}>
-              <Text style={s.cardTitle}>⚠️ En mora</Text>
-              <Text style={[s.montoMediano, { color: datos.cuentas_en_mora > 0 ? '#e53e3e' : '#2e7d32' }]}>
-                {datos.cuentas_en_mora}
-              </Text>
-              <Text style={s.cardSub}>cuenta{datos.cuentas_en_mora !== 1 ? 's' : ''} con mora</Text>
-            </View>
-          </View>
+          )}
+
+          {/* ── Cobros — solo si tiene perfil de cobrador ── */}
+          {esCobrador && datosCobro && (
+            <>
+              {esVendedor && <Text style={s.seccionTitle}>💰 Cobros</Text>}
+              <View style={s.card}>
+                <Text style={s.cardTitle}>📅 Cobrado esta semana</Text>
+                <Text style={s.montoGrande}>{fmt(datosCobro.cobrado_semana_actual)}</Text>
+                <Comparativa actual={datosCobro.cobrado_semana_actual} anterior={datosCobro.cobrado_semana_pasada} />
+              </View>
+
+              <View style={s.card}>
+                <Text style={s.cardTitle}>🗓️ Cobrado este mes</Text>
+                <Text style={s.montoGrande}>{fmt(datosCobro.cobrado_mes_actual)}</Text>
+                <Comparativa actual={datosCobro.cobrado_mes_actual} anterior={datosCobro.cobrado_mes_pasado} />
+              </View>
+
+              <View style={s.row}>
+                <View style={[s.card, s.cardMitad]}>
+                  <Text style={s.cardTitle}>🚶 Ruta de hoy</Text>
+                  <Text style={s.montoMediano}>
+                    {datosCobro.gestionados_hoy}/{datosCobro.clientes_ruta_hoy}
+                  </Text>
+                  <Text style={s.cardSub}>cuentas gestionadas</Text>
+                </View>
+                <View style={[s.card, s.cardMitad]}>
+                  <Text style={s.cardTitle}>⚠️ En mora</Text>
+                  <Text style={[s.montoMediano, { color: datosCobro.cuentas_en_mora > 0 ? '#e53e3e' : '#2e7d32' }]}>
+                    {datosCobro.cuentas_en_mora}
+                  </Text>
+                  <Text style={s.cardSub}>cuenta{datosCobro.cuentas_en_mora !== 1 ? 's' : ''} con mora</Text>
+                </View>
+              </View>
+            </>
+          )}
+
+          {/* ── Ventas — solo si tiene perfil de vendedor ── */}
+          {esVendedor && datosVenta && (
+            <>
+              {esCobrador && <Text style={[s.seccionTitle, { marginTop: 4 }]}>🛒 Ventas</Text>}
+              <View style={s.card}>
+                <Text style={s.cardTitle}>📅 Vendido esta semana</Text>
+                <Text style={s.montoGrande}>{fmt(datosVenta.vendido_semana_actual)}</Text>
+                <Comparativa actual={datosVenta.vendido_semana_actual} anterior={datosVenta.vendido_semana_pasada} />
+              </View>
+
+              <View style={s.card}>
+                <Text style={s.cardTitle}>🗓️ Vendido este mes</Text>
+                <Text style={s.montoGrande}>{fmt(datosVenta.vendido_mes_actual)}</Text>
+                <Comparativa actual={datosVenta.vendido_mes_actual} anterior={datosVenta.vendido_mes_pasado} />
+              </View>
+
+              <View style={s.row}>
+                <View style={[s.card, s.cardMitad]}>
+                  <Text style={s.cardTitle}>🛍️ Ventas de hoy</Text>
+                  <Text style={s.montoMediano}>{datosVenta.ventas_hoy}</Text>
+                  <Text style={s.cardSub}>venta{datosVenta.ventas_hoy !== 1 ? 's' : ''} registrada{datosVenta.ventas_hoy !== 1 ? 's' : ''}</Text>
+                </View>
+                <View style={[s.card, s.cardMitad]}>
+                  <Text style={s.cardTitle}>📦 Asignación de hoy</Text>
+                  <Text style={s.montoMediano}>
+                    {datosVenta.unidades_vendidas_hoy}/{datosVenta.unidades_asignadas_hoy}
+                  </Text>
+                  <Text style={s.cardSub}>unidades vendidas</Text>
+                </View>
+              </View>
+            </>
+          )}
         </ScrollView>
       )}
     </View>
@@ -109,11 +186,17 @@ const s = StyleSheet.create({
   errorTxt: { color: '#888', textAlign: 'center', fontSize: 13 },
   header: {
     backgroundColor: '#1565C0', flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingTop: (StatusBar.currentHeight || 0) + 8, paddingBottom: 16, paddingHorizontal: 16,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom: 16, paddingHorizontal: 16,
   },
   backBtn: {},
   backArrow: { color: '#fff', fontSize: 24 },
   headerTitle: { color: '#fff', fontSize: 18, fontWeight: '800' },
+
+  pendBanner: { backgroundColor: '#fee2e2', borderWidth: 1, borderColor: '#fca5a5', borderRadius: 10, padding: 12, marginBottom: 12 },
+  pendTxt:    { color: '#991b1b', fontSize: 12, fontWeight: '600', lineHeight: 17 },
+
+  seccionTitle: { fontSize: 13, fontWeight: '800', color: '#555', marginBottom: 8, marginTop: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
 
   card: { backgroundColor: '#fff', borderRadius: 16, padding: 18, marginBottom: 12, elevation: 2 },
   cardTitle: { fontSize: 13, fontWeight: '700', color: '#666', marginBottom: 8 },

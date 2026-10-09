@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
-  StatusBar, ActivityIndicator, Alert, Linking, Modal, ScrollView,
+  StatusBar, ActivityIndicator, Alert, Linking, Modal, ScrollView, TextInput,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
@@ -10,6 +10,9 @@ import { Asset } from 'expo-asset';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { fechaHoyLocal, fechaLocalDesdeISO } from '../services/dateUtils';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ClienteDatosModal from '../components/ClienteDatosModal';
+import { htmlMetodosPago } from '../services/reciboWhatsApp';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 const hora = (iso) => {
@@ -91,6 +94,7 @@ const buildTicketHtml = (venta, logoUri) => {
         : `<tr><td>Pago recibido</td><td style="text-align:right;font-weight:600">${fmt(venta.pago_recibido || venta.total)}</td></tr>`
       }
     </table>
+    <div style="margin-top:8px">${htmlMetodosPago(11)}</div>
     <div class="divider"></div>
     <div style="text-align:center;font-size:14px;font-weight:700">¡Gracias por su compra!</div>
     <div style="text-align:center;font-size:12px;color:#555">DISTRIBUIDORA BM<br/>"Equipando su hogar con calidad"</div>
@@ -134,12 +138,51 @@ _Conserve este mensaje como comprobante._`;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function HistorialVentasScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const [ventas,   setVentas]   = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [selected, setSelected] = useState(null);
   const [logoUri,  setLogoUri]  = useState(null);
+  const [clienteDatosId, setClienteDatosId] = useState(null);
   const logoLoaded = useRef(false);
+
+  // Si se editó el nombre/teléfonos del cliente desde el detalle, se refleja
+  // al instante en la lista y en el detalle abierto (todas las ventas de hoy
+  // de ese mismo cliente), sin tener que recargar.
+  const aplicarClienteActualizado = (c) => {
+    const mezclar = (v) => (v.cliente?.id === c.id
+      ? {
+          ...v,
+          cliente: {
+            ...v.cliente,
+            nombre: c.nombre,
+            apellido: c.apellido,
+            telefono_normal: c.telefono_normal,
+            telefono_whatsapp: c.telefono_whatsapp,
+          },
+        }
+      : v);
+    setVentas(prev => prev.map(mezclar));
+    setSelected(prev => (prev ? mezclar(prev) : prev));
+  };
+
+  // ── Corregir venta (mismo día, sin abonos posteriores) ──────────────────────
+  // Reutiliza la pantalla completa de Nueva Venta en modo edición — cliente
+  // y productos precargados, catálogo completo para agregar/quitar lo que
+  // haga falta. Al guardar, corrige esta venta (PATCH) en vez de crear una.
+  const abrirCorreccion = (venta) => {
+    setSelected(null);
+    navigation.navigate('NuevaVenta', {
+      modoEdicion: true,
+      ventaId: venta.id,
+      ventaInicial: {
+        cliente: venta.cliente,
+        detalles: venta.detalles,
+        prima: parseFloat(venta.prima || venta.abono_inicial || 0),
+      },
+    });
+  };
 
   // Cargar logo una vez
   const cargarLogo = useCallback(async () => {
@@ -348,6 +391,16 @@ export default function HistorialVentasScreen({ navigation }) {
                 <Text style={s.btnPrintTxt}>🖨️  Imprimir</Text>
               </TouchableOpacity>
             </View>
+            {v.cliente?.id ? (
+              <TouchableOpacity style={s.btnCliente} onPress={() => setClienteDatosId(v.cliente.id)}>
+                <Text style={s.btnClienteTxt}>👤  Ver / editar datos del cliente</Text>
+              </TouchableOpacity>
+            ) : null}
+            {!['cancelada', 'devuelta'].includes(v.estado) && (
+              <TouchableOpacity style={s.btnCorregir} onPress={() => abrirCorreccion(v)}>
+                <Text style={s.btnCorregirTxt}>✏️  Corregir venta (producto o prima)</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </Modal>
@@ -359,7 +412,7 @@ export default function HistorialVentasScreen({ navigation }) {
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
 
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn}>
           <Text style={s.backTxt}>←</Text>
         </TouchableOpacity>
@@ -401,6 +454,13 @@ export default function HistorialVentasScreen({ navigation }) {
       )}
 
       {renderModal()}
+
+      <ClienteDatosModal
+        visible={!!clienteDatosId}
+        clienteId={clienteDatosId}
+        onClose={() => setClienteDatosId(null)}
+        onActualizado={aplicarClienteActualizado}
+      />
     </View>
   );
 }
@@ -410,7 +470,7 @@ const s = StyleSheet.create({
   root:   { flex: 1, backgroundColor: '#f5f6fa' },
   header: {
     backgroundColor: '#1565C0',
-    paddingTop: (StatusBar.currentHeight || 0) + 10,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
     paddingBottom: 18, paddingHorizontal: 16,
     flexDirection: 'row', alignItems: 'center', gap: 12,
   },
@@ -493,4 +553,23 @@ const s = StyleSheet.create({
   btnWaTxt:   { color: '#fff', fontWeight: '800', fontSize: 14 },
   btnPrint:   { flex: 1, backgroundColor: '#fff', borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 1.5, borderColor: '#bbb' },
   btnPrintTxt:{ color: '#444', fontWeight: '700', fontSize: 14 },
+
+  btnCliente:    { marginHorizontal: 16, marginTop: 10, alignItems: 'center', paddingVertical: 13, borderRadius: 12, borderWidth: 1.5, borderColor: '#1565C0' },
+  btnClienteTxt: { color: '#1565C0', fontWeight: '800', fontSize: 14 },
+  btnCorregir:   { marginHorizontal: 16, marginTop: 10, alignItems: 'center', paddingVertical: 10 },
+  btnCorregirTxt:{ color: '#1565C0', fontWeight: '700', fontSize: 13 },
+
+  editWarn: { color: '#856404', backgroundColor: '#fff8e1', borderRadius: 10, padding: 10, fontSize: 12, lineHeight: 17, marginTop: 12 },
+  editSectionTitle: { fontSize: 12, fontWeight: '700', color: '#888', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 18, marginBottom: 8 },
+  editProdRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f5f5f5' },
+  editQtyRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  editQtyBtn: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#f0f0f0', alignItems: 'center', justifyContent: 'center' },
+  editQtyBtnTxt: { fontSize: 16, fontWeight: '800', color: '#1565C0' },
+  editQtyVal: { fontSize: 14, fontWeight: '700', color: '#1a1a1a', minWidth: 18, textAlign: 'center' },
+  editInput: {
+    borderWidth: 1, borderColor: '#ddd', borderRadius: 10,
+    padding: 12, fontSize: 14, color: '#1a1a1a',
+  },
+  btnGuardarCorreccion: { backgroundColor: '#1565C0', borderRadius: 12, paddingVertical: 15, alignItems: 'center' },
+  btnGuardarCorreccionTxt: { color: '#fff', fontWeight: '800', fontSize: 15 },
 });

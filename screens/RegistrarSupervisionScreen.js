@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView, TextIn
 import api, { esErrorTransitorio } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const OPCIONES_SINO = [
   { value: true, label: 'Sí', color: '#2e7d32', bg: '#e8f5e9' },
@@ -10,6 +11,7 @@ const OPCIONES_SINO = [
 ];
 
 export default function RegistrarSupervisionScreen({ route, navigation }) {
+  const insets = useSafeAreaInsets();
   const { rutaId, rutaNombre, cobradorNombre } = route.params;
   const { isOnline } = useConnectivity();
 
@@ -69,7 +71,7 @@ export default function RegistrarSupervisionScreen({ route, navigation }) {
   return (
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Text style={s.backArrow}>←</Text>
         </TouchableOpacity>
@@ -155,7 +157,8 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#f5f6fa' },
   header: {
     backgroundColor: '#1565C0', flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingTop: (StatusBar.currentHeight || 0) + 8, paddingBottom: 16, paddingHorizontal: 16,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom: 16, paddingHorizontal: 16,
   },
   backBtn: {},
   backArrow: { color: '#fff', fontSize: 24 },

@@ -4,8 +4,9 @@ import {
   StatusBar, ActivityIndicator, Modal, ScrollView,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import api from '../services/api';
+import api, { TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
@@ -23,6 +24,7 @@ const FILTROS = [
 ];
 
 export default function MisPreventasScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const { isOnline } = useConnectivity();
   const [preventas, setPreventas] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -35,7 +37,7 @@ export default function MisPreventasScreen({ navigation }) {
     setError('');
     try {
       const params = filtro ? { estado: filtro } : {};
-      const { data } = await api.get('/preventas', { params });
+      const { data } = await api.get('/preventas', { params, timeout: TIMEOUT_LECTURA_CACHE });
       setPreventas(Array.isArray(data) ? data : (data.data || []));
     } catch (e) {
       setError(isOnline ? (e?.message || 'No se pudieron cargar las preventas.') : 'Sin conexión — necesitas internet para ver tus preventas.');
@@ -70,7 +72,7 @@ export default function MisPreventasScreen({ navigation }) {
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
 
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Text style={s.backArrow}>←</Text>
         </TouchableOpacity>
@@ -163,7 +165,8 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#f5f6fa' },
   header: {
     backgroundColor: '#1565C0', flexDirection: 'row', alignItems: 'center',
-    paddingTop: (StatusBar.currentHeight || 0) + 8, paddingBottom: 16, paddingHorizontal: 16, gap: 12,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom: 16, paddingHorizontal: 16, gap: 12,
   },
   backBtn: { paddingRight: 4 },
   backArrow: { color: '#fff', fontSize: 24 },

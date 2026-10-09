@@ -1,16 +1,17 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
-  StatusBar, ActivityIndicator, Modal, ScrollView, Alert, Linking,
+  StatusBar, ActivityIndicator, Modal, ScrollView, Alert, Linking, TextInput,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import api from '../services/api';
+import api, { TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import { useAuth } from '../context/AuthContext';
-import { leerHistorial } from '../services/cobrosOffline';
+import { leerHistorial, leerPagosPendientes } from '../services/cobrosOffline';
 import { fechaHoyLocal, fechaLocalDesdeISO, fmtFechaCorta } from '../services/dateUtils';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Normaliza la respuesta real de GET /cobros/historial (items mezcla pagos
 // y visitas, distinguidos por `tipo`) al mismo shape que usa el historial
@@ -59,9 +60,13 @@ const normalizarItemServidor = (fechaDia) => (it) => {
   return {
     ...base,
     ventaNumero: it.numero_venta || null,
-    numeroRecibo: null,
+    numeroRecibo: it.numero_recibo || null,
     producto: (it.productos || []).map(x => x.nombre).join(', ') || null,
     monto: it.monto || 0,
+    // Solo existen para pagos hechos después de este arreglo — los
+    // anteriores quedan null y el ticket omite esas líneas sin romperse.
+    saldoAntes: it.saldo_antes ?? null,
+    saldoDespues: it.saldo_despues ?? null,
     metodo: it.metodo_pago || null,
     referencia: it.referencia || null,
     resultadoVisita: null,
@@ -104,11 +109,11 @@ const VISITA_INFO = {
   sin_saldo:     { label: 'Cuenta al día (sin saldo)', icon: '💚', color: '#2e7d32', bg: '#e8f5e9' },
 };
 
-// Formato compacto — igual al recibo original al momento de cobrar. No
-// incluye DEBE/SALDO porque el historial no guarda saldo antes/después,
-// solo el monto cobrado — evita mostrar datos que no tenemos certeza son
-// correctos.
-const buildReciboHtml = ({ clienteNombre, clienteCodigo, ventaNumero, producto, numeroRecibo, monto, metodo, proximaVisita, fecha, nombreCobrador }) => {
+// Formato compacto — igual al recibo original al momento de cobrar.
+// Debía/Resta solo se muestran si el pago los trae (guardados desde que se
+// hizo el cobro) — los pagos de antes de ese cambio no los tienen y el
+// ticket omite esas líneas en vez de mostrar datos incorrectos.
+const buildReciboHtml = ({ clienteNombre, clienteCodigo, ventaNumero, producto, numeroRecibo, monto, metodo, proximaVisita, fecha, nombreCobrador, saldoAntes, saldoDespues }) => {
   const fechaFmt = fmtFechaCorta(fecha);
   const proxFmt = proximaVisita ? fmtFechaCorta(proximaVisita) : '';
   return `<html><head>
@@ -134,7 +139,9 @@ const buildReciboHtml = ({ clienteNombre, clienteCodigo, ventaNumero, producto, 
     <div class="row"><span>Cobrador:</span><span>${nombreCobrador||''}</span></div>
     <div class="row"><span>Pago:</span><span>${metodo ? metodo.charAt(0).toUpperCase()+metodo.slice(1) : ''}</span></div>
     <div class="div"></div>
+    ${saldoAntes !== null && saldoAntes !== undefined ? `<div class="row"><span>Debía:</span><span>$${Number(saldoAntes).toFixed(2)}</span></div>` : ''}
     <div class="row tot"><span class="b">Abona:</span><span class="b">$${Number(monto).toFixed(2)}</span></div>
+    ${saldoDespues !== null && saldoDespues !== undefined ? `<div class="row"><span>Resta:</span><span>$${Number(saldoDespues).toFixed(2)}</span></div>` : ''}
     <div class="div"></div>
     ${proxFmt ? `<div class="row"><span>Próx. visita:</span><span>${proxFmt}</span></div><div class="div"></div>` : ''}
     <div class="c">Gracias por su pago</div>
@@ -166,8 +173,8 @@ const mensajeCobro = (item) => {
 🔖 Venta: ${item.ventaNumero || 'N/A'}${item.producto ? `\n📦 Producto: ${item.producto}` : ''}
 💳 Método: ${item.metodo}
 
-💰 *Monto abonado: ${fmt(item.monto)}*
-${proxFmt ? `\n📅 *Próxima visita: ${proxFmt}*` : ''}
+${item.saldoAntes !== null && item.saldoAntes !== undefined ? `💸 Lo que debía: ${fmt(item.saldoAntes)}\n` : ''}💰 *Lo que abona: ${fmt(item.monto)}*
+${item.saldoDespues !== null && item.saldoDespues !== undefined ? `📉 Lo que resta: ${fmt(item.saldoDespues)}\n` : ''}${proxFmt ? `\n📅 *Próxima visita: ${proxFmt}*` : ''}
 ━━━━━━━━━━━━━━━━━━━━
 ¡Gracias por su pago! 🙏`;
 };
@@ -188,10 +195,12 @@ _Distribuidora BM_`;
 };
 
 export default function HistorialDiaScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const [items,   setItems]   = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [esCache,  setEsCache]  = useState(false);
+  const [cobrosPend, setCobrosPend] = useState(0);
   const { isOnline } = useConnectivity();
   const { user } = useAuth();
   const nombreCobrador = user?.name || user?.full_name || user?.nombre || user?.usuario || 'Cobrador';
@@ -199,13 +208,14 @@ export default function HistorialDiaScreen({ navigation }) {
   useFocusEffect(useCallback(() => {
     (async () => {
       setLoading(true);
+      leerPagosPendientes().then(p => setCobrosPend(p.length));
 
       // Fuente principal: servidor (sobrevive logout, cambio de teléfono,
       // etc.) — trae pagos Y visitas mezclados, ya ordenados por hora.
       // La caché local solo se usa como respaldo cuando no hay conexión.
       if (isOnline) {
         try {
-          const { data } = await api.get('/cobros/historial'); // sin ?fecha= = hoy
+          const { data } = await api.get('/cobros/historial', { timeout: TIMEOUT_LECTURA_CACHE }); // sin ?fecha= = hoy
           const deServidor = (data.items || []).map(normalizarItemServidor(data.fecha));
           setItems(deServidor);
           setEsCache(false);
@@ -339,7 +349,7 @@ export default function HistorialDiaScreen({ navigation }) {
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0"/>
 
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn}>
           <Text style={s.backTxt}>←</Text>
         </TouchableOpacity>
@@ -356,6 +366,15 @@ export default function HistorialDiaScreen({ navigation }) {
       {esCache && !loading && (
         <View style={s.offlineBanner}>
           <Text style={s.offlineTxt}>📴 Sin conexión — mostrando historial guardado en este teléfono</Text>
+        </View>
+      )}
+
+      {cobrosPend > 0 && !loading && (
+        <View style={s.pendBanner}>
+          <Text style={s.pendTxt}>
+            ⚠️ Tienes {cobrosPend} cobro{cobrosPend !== 1 ? 's' : ''} guardado{cobrosPend !== 1 ? 's' : ''} en este teléfono que NO ha{cobrosPend !== 1 ? 'n' : ''} llegado al servidor todavía.
+            {'\n'}Ese dinero no está sumado en "Cobrado hoy" — súmalo aparte al efectivo que entregues, y conéctate a internet para que se envíe.
+          </Text>
         </View>
       )}
 
@@ -538,7 +557,7 @@ const s = StyleSheet.create({
   root:   { flex: 1, backgroundColor: '#f5f6fa' },
   header: {
     backgroundColor: '#1565C0',
-    paddingTop: (StatusBar.currentHeight || 0) + 10,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
     paddingBottom: 18,
     paddingHorizontal: 16,
     flexDirection: 'row',
@@ -552,6 +571,9 @@ const s = StyleSheet.create({
 
   offlineBanner:{ backgroundColor: '#fff3cd', margin: 12, borderRadius: 10, padding: 10 },
   offlineTxt:   { color: '#856404', fontSize: 12, fontWeight: '600', textAlign: 'center' },
+
+  pendBanner: { backgroundColor: '#fee2e2', borderWidth: 1, borderColor: '#fca5a5', margin: 12, borderRadius: 10, padding: 12 },
+  pendTxt:    { color: '#991b1b', fontSize: 12, fontWeight: '600', lineHeight: 17 },
 
   totalRow: { flexDirection: 'row', marginHorizontal: 12, marginTop: 12, gap: 8 },
   totalCard: {

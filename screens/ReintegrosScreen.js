@@ -2,9 +2,11 @@ import React, { useState, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, StatusBar,
   FlatList, ActivityIndicator, Alert, Modal, TextInput, ScrollView,
+  Linking, Platform,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import api from '../services/api';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
@@ -22,6 +24,7 @@ const ACCIONES = [
 ];
 
 export default function ReintegrosScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const [items,      setItems]      = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [filtro,     setFiltro]     = useState('pendiente');
@@ -65,6 +68,23 @@ export default function ReintegrosScreen({ navigation }) {
     setModal(reintegro);
   };
 
+  const abrirMapa = (lat, lng, nombre) => {
+    const label = encodeURIComponent(nombre || 'Cliente');
+    const url = Platform.OS === 'ios'
+      ? `maps:0,0?q=${label}@${lat},${lng}`
+      : `geo:${lat},${lng}?q=${lat},${lng}(${label})`;
+    Linking.openURL(url).catch(() => {
+      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`);
+    });
+  };
+
+  const abrirWaze = (lat, lng) => {
+    Linking.openURL(`waze://?ll=${lat},${lng}&navigate=yes`).catch(() => {
+      // Si no tiene Waze instalado, el enlace web ofrece instalarlo o abre el sitio.
+      Linking.openURL(`https://waze.com/ul?ll=${lat},${lng}&navigate=yes`);
+    });
+  };
+
   const renderItem = ({ item }) => {
     const cfg = ESTADO_CFG[item.estado] || ESTADO_CFG.pendiente;
     return (
@@ -94,6 +114,23 @@ export default function ReintegrosScreen({ navigation }) {
           <Text style={s.cardMotivo} numberOfLines={2}>📝 {item.motivo}</Text>
         ) : null}
 
+        {item.cliente?.latitud && item.cliente?.longitud && (
+          <View style={s.ubicRow}>
+            <TouchableOpacity
+              style={s.ubicBtn}
+              onPress={() => abrirMapa(item.cliente.latitud, item.cliente.longitud, item.cliente.nombre)}
+            >
+              <Text style={s.ubicBtnTxt}>🗺️ Mapa</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={s.ubicBtn}
+              onPress={() => abrirWaze(item.cliente.latitud, item.cliente.longitud)}
+            >
+              <Text style={s.ubicBtnTxt}>🚗 Waze</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         <Text style={s.cardTap}>Toca para actualizar estado →</Text>
       </TouchableOpacity>
     );
@@ -105,7 +142,7 @@ export default function ReintegrosScreen({ navigation }) {
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#B71C1C"/>
 
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn}>
           <Text style={s.backTxt}>←</Text>
         </TouchableOpacity>
@@ -196,7 +233,7 @@ const s = StyleSheet.create({
   root:   { flex: 1, backgroundColor: '#f5f6fa' },
   header: {
     backgroundColor: '#B71C1C',
-    paddingTop: (StatusBar.currentHeight || 0) + 10,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
     paddingBottom: 16, paddingHorizontal: 16,
     flexDirection: 'row', alignItems: 'center', gap: 12,
   },
@@ -223,6 +260,9 @@ const s = StyleSheet.create({
   cardDeuda:   { fontSize: 13, fontWeight: '600', color: '#333', marginTop: 4 },
   cardMotivo:  { color: '#888', fontSize: 12, marginTop: 6, fontStyle: 'italic' },
   cardTap:     { color: '#B71C1C', fontSize: 11, marginTop: 8, textAlign: 'right', fontWeight: '600' },
+  ubicRow:     { flexDirection: 'row', gap: 8, marginTop: 8 },
+  ubicBtn:     { flex: 1, backgroundColor: '#f0f4f8', borderRadius: 8, paddingVertical: 8, alignItems: 'center' },
+  ubicBtnTxt:  { color: '#1565C0', fontSize: 12, fontWeight: '700' },
 
   empty:    { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyIcon:{ fontSize: 48, marginBottom: 12 },

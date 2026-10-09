@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from './api';
+import * as backupOffline from './backupOffline';
 
 const QUEUE_KEY = 'OFFLINE_REQUEST_QUEUE';
 
@@ -47,6 +48,9 @@ export const enqueueRequest = async ({ method, url, data, label, useFormData = f
   };
   queue.push(item);
   await saveRawQueue(queue);
+  // No bloquea el guardado normal si falla (ej. todavía no se configuró la
+  // carpeta de respaldo) — es una bitácora extra, no la fuente de verdad.
+  backupOffline.registrarPendiente(item).catch(() => {});
   return item;
 };
 
@@ -64,7 +68,22 @@ export const clearQueue = async () => {
 const buildFormData = (payload = {}) => {
   const formData = new FormData();
   Object.entries(payload).forEach(([key, value]) => {
-    if (value && typeof value === 'object' && value.uri) {
+    if (Array.isArray(value)) {
+      // Varias fotos bajo la misma clave (ej. fotos de una garantía) — el
+      // sufijo [] es lo que PHP necesita para juntarlas en un solo array en
+      // vez de quedarse solo con la última.
+      value.forEach((item) => {
+        if (item && typeof item === 'object' && item.uri) {
+          formData.append(`${key}[]`, {
+            uri: item.uri,
+            name: item.name || `${key}.jpg`,
+            type: item.type || 'image/jpeg',
+          });
+        } else if (item !== undefined && item !== null) {
+          formData.append(`${key}[]`, String(item));
+        }
+      });
+    } else if (value && typeof value === 'object' && value.uri) {
       formData.append(key, {
         uri: value.uri,
         name: value.name || `${key}.jpg`,
@@ -149,6 +168,7 @@ const _syncQueueInterno = async () => {
       await removeRequest(item.id);
       synced += 1;
       details.push({ id: item.id, status: 'ok', label: item.label, url: item.url });
+      backupOffline.registrarSincronizado(item).catch(() => {});
       console.log(`   ✅ ÉXITO: ${item.label} sincronizado`);
     } catch (error) {
       const errorMessage = error.response?.data?.message || error.message || String(error);

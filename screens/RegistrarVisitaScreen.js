@@ -10,6 +10,7 @@ import api, { esErrorTransitorio } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
 import { guardarEnHistorial, marcarClienteVisitado } from '../services/cobrosOffline';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const RESULTADOS = [
   { value: 'no_encontrado', label: 'No estaba en casa',   icon: '🚪', color: '#1565C0', bg: '#e3f2fd' },
@@ -30,6 +31,7 @@ const SIN_EVIDENCIA = new Set(['abono_previo', 'sin_saldo']);
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
 export default function RegistrarVisitaScreen({ navigation, route }) {
+  const insets = useSafeAreaInsets();
   const { cliente, grupoClientes, resultadoInicial } = route.params;
   const { isOnline } = useConnectivity();
 
@@ -72,21 +74,28 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
 
   // Tomar foto (única forma — cámara)
   const tomarFoto = useCallback(async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permiso de cámara requerido', 'Ve a Configuración y habilita el acceso a la cámara para esta app.');
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.75,
-      allowsEditing: false,
-    });
-    if (!result.canceled && result.assets?.length > 0) {
-      const asset = result.assets[0];
-      setFoto({ uri: asset.uri, type: asset.mimeType || 'image/jpeg', name: 'foto_hogar.jpg' });
-      // GPS se captura en segundo plano sin que el cobrador lo vea
-      capturarGpsSilencioso();
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso de cámara requerido', 'Ve a Configuración y habilita el acceso a la cámara para esta app.');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.75,
+        allowsEditing: false,
+      });
+      if (!result.canceled && result.assets?.length > 0) {
+        const asset = result.assets[0];
+        setFoto({ uri: asset.uri, type: asset.mimeType || 'image/jpeg', name: 'foto_hogar.jpg' });
+        // GPS se captura en segundo plano sin que el cobrador lo vea
+        capturarGpsSilencioso();
+      }
+    } catch (e) {
+      // Antes no había try/catch aquí — si launchCameraAsync tronaba (ej.
+      // problema de FileProvider, cámara ocupada), no pasaba nada visible
+      // y el cobrador se quedaba sin saber qué hacer.
+      Alert.alert('Error', 'No se pudo abrir la cámara: ' + (e?.message || String(e)));
     }
   }, [capturarGpsSilencioso]);
 
@@ -151,7 +160,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
     // problema transitorio (red caída a mitad de camino, servidor 5xx). Sin
     // este respaldo en el catch, una falla momentánea perdía la visita
     // completa (incluida la foto ya tomada) y obligaba a rehacerla.
-    const guardarOffline = async (destino, resultadoDestino, sinEvidenciaDestino) => {
+    const guardarOffline = async (destino, resultadoDestino, sinEvidenciaDestino, idempotencyKey) => {
       await offlineQueue.enqueueRequest({
         method: 'POST',
         url: `/cobros/clientes/${destino.id}/visita`,
@@ -159,6 +168,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
         useFormData: !sinEvidenciaDestino,
         data: {
           resultado: resultadoDestino,
+          idempotency_key: idempotencyKey,
           ...(observaciones.trim() && { observaciones: observaciones.trim() }),
           ...(resultadoDestino === 'promesa_pago' && { promesa_fecha: promesaFecha }),
           ...(!sinEvidenciaDestino && ubicacion && { latitud: String(ubicacion.lat), longitud: String(ubicacion.lng) }),
@@ -181,9 +191,13 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
     const registrarParaCliente = async (destino) => {
       const resultadoDestino = resultadoDe(destino);
       const sinEvidenciaDestino = SIN_EVIDENCIA.has(resultadoDestino);
+      // Generada una vez por cliente/intento y reutilizada si termina en la
+      // cola offline — así el servidor reconoce un reintento tras timeout y
+      // no duplica la visita (con foto y todo) cuando se recupera la señal.
+      const idempotencyKey = `visita-${destino.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
       if (!isOnline) {
-        await guardarOffline(destino, resultadoDestino, sinEvidenciaDestino);
+        await guardarOffline(destino, resultadoDestino, sinEvidenciaDestino, idempotencyKey);
         return { ok: true, offline: true };
       }
       try {
@@ -193,6 +207,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
         if (sinEvidenciaDestino) {
           payload = {
             resultado: resultadoDestino,
+            idempotency_key: idempotencyKey,
             ...(observaciones.trim() && { observaciones: observaciones.trim() }),
           };
           headers = { 'Content-Type': 'application/json' };
@@ -201,6 +216,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
           // por cliente (no se puede reutilizar el mismo objeto ya enviado).
           const form = new FormData();
           form.append('resultado', resultadoDestino);
+          form.append('idempotency_key', idempotencyKey);
           if (observaciones.trim()) form.append('observaciones', observaciones.trim());
           if (resultadoDestino === 'promesa_pago') form.append('promesa_fecha', promesaFecha);
           if (ubicacion) {
@@ -228,7 +244,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
         return { ok: true, offline: false };
       } catch (e) {
         if (esErrorTransitorio(e)) {
-          await guardarOffline(destino, resultadoDestino, sinEvidenciaDestino);
+          await guardarOffline(destino, resultadoDestino, sinEvidenciaDestino, idempotencyKey);
           return { ok: true, offline: true };
         }
         return { ok: false, error: e?.response?.data?.message || e?.message || 'No se pudo registrar la visita.' };
@@ -286,7 +302,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
 
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Text style={s.backArrow}>←</Text>
@@ -506,7 +522,8 @@ const s = StyleSheet.create({
   root:   { flex: 1, backgroundColor: '#f5f6fa' },
   header: {
     backgroundColor: '#1565C0', flexDirection: 'row', alignItems: 'center',
-    paddingTop: (StatusBar.currentHeight || 0) + 8, paddingBottom: 16, paddingHorizontal: 16, gap: 12,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom: 16, paddingHorizontal: 16, gap: 12,
   },
   backBtn:    { paddingRight: 4 },
   backArrow:  { color: '#fff', fontSize: 24 },

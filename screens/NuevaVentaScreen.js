@@ -20,14 +20,11 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import api, { esErrorTransitorio } from '../services/api';
+import api, { esErrorTransitorio, TIMEOUT_LECTURA_CACHE } from '../services/api';
 import * as localDb from '../services/localDb';
 import { guardarAsignacionCache, leerAsignacionCache } from '../services/localDb';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system/legacy';
-import { Asset } from 'expo-asset';
-import escpos from '../services/escpos';
 import * as offlineQueue from '../services/offlineQueue';
 import { useConnectivity } from '../services/connectivity';
 import * as Location from 'expo-location';
@@ -36,21 +33,13 @@ import { extractTextFromImage } from '../services/ocr';
 import { fmtFechaCorta } from '../services/dateUtils';
 import FirmaPad from '../components/FirmaPad';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useEscalaTexto } from '../hooks/useEscalaTexto';
 
 const { width: SW } = Dimensions.get('window');
 
 // ==================== FUNCIONES HELPER ====================
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
-const escapeHtml = (str) => {
-  if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-};
 
 const normalizePaymentPlans = (plans) => {
   if (!plans) return null;
@@ -67,11 +56,20 @@ const normalizePaymentPlans = (plans) => {
 };
 
 // ==================== COMPONENTE PRINCIPAL ====================
-export default function NuevaVentaScreen({ navigation }) {
+export default function NuevaVentaScreen({ navigation, route }) {
   const { colors } = useTheme();
+  // Modo corrección: se abre desde "Mis ventas de hoy" sobre una venta que
+  // ya existe — mismo catálogo/carrito que una venta nueva, pero con
+  // cliente y productos precargados, y al guardar corrige esa venta
+  // (PATCH) en vez de crear una nueva (POST).
+  const modoEdicion = !!route?.params?.modoEdicion;
+  const ventaEditId = route?.params?.ventaId;
+  const ventaInicial = route?.params?.ventaInicial;
+  const [motivoCorreccion, setMotivoCorreccion] = useState('');
   const { user } = useAuth();
   const { isOnline } = useConnectivity();
   const insets = useSafeAreaInsets();
+  const { escala, aumentar: aumentarTexto, disminuir: disminuirTexto, puedeAumentar, puedeDisminuir } = useEscalaTexto();
 
   const sucursalId = user?.sucursales?.[0]?.id || 1;
 
@@ -95,16 +93,11 @@ export default function NuevaVentaScreen({ navigation }) {
   const [cuotasEditingId, setCuotasEditingId] = useState(null);
   const [precioEspecial, setPrecioEspecial] = useState('');
   const [cambioPrecioStep, setCambioPrecioStep] = useState(false);
-  const [ticketLogoUri, setTicketLogoUri] = useState(null);
-  const [ticketQrUri, setTicketQrUri] = useState(null);
   const [cliente, setCliente] = useState({ id: null, nombre: 'Consumidor Final' });
   const [descuento, setDescuento] = useState('');
   const [pago, setPago] = useState('');
   const [usarPrima, setUsarPrima] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [printing, setPrinting] = useState(false);
-  const [printerModalVisible, setPrinterModalVisible] = useState(false);
-  const [printerAddr, setPrinterAddr] = useState('');
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
 
   // ── Pagaré (crédito) ─────────────────────────────────────────────────────────
@@ -307,6 +300,27 @@ export default function NuevaVentaScreen({ navigation }) {
   const [ccFrenteError, setCcFrenteError] = useState('');
   const [ccReversoError, setCcReversoError] = useState('');
 
+  // Campos opcionales adicionales (dirección y referencias personales) —
+  // mismos nombres que en CrearClienteScreen.js y el panel Filament.
+  const [ccMostrarOpcionales, setCcMostrarOpcionales] = useState(false);
+  const [ccDireccion, setCcDireccion] = useState('');
+  const [ccDepartamento, setCcDepartamento] = useState('');
+  const [ccMunicipio, setCcMunicipio] = useState('');
+  const [ccDistrito, setCcDistrito] = useState('');
+  const [ccNombreConyuge, setCcNombreConyuge] = useState('');
+  const [ccRefFam1Nombre, setCcRefFam1Nombre] = useState('');
+  const [ccRefFam1Telefono, setCcRefFam1Telefono] = useState('');
+  const [ccRefFam1Parentesco, setCcRefFam1Parentesco] = useState('');
+  const [ccRefFam2Nombre, setCcRefFam2Nombre] = useState('');
+  const [ccRefFam2Telefono, setCcRefFam2Telefono] = useState('');
+  const [ccRefFam2Parentesco, setCcRefFam2Parentesco] = useState('');
+  const [ccRefCon1Nombre, setCcRefCon1Nombre] = useState('');
+  const [ccRefCon1Telefono, setCcRefCon1Telefono] = useState('');
+  const [ccRefCon1Trabajo, setCcRefCon1Trabajo] = useState('');
+  const [ccRefCon2Nombre, setCcRefCon2Nombre] = useState('');
+  const [ccRefCon2Telefono, setCcRefCon2Telefono] = useState('');
+  const [ccRefCon2Trabajo, setCcRefCon2Trabajo] = useState('');
+
   const ccDuiRegex = /^\d{8}-\d$/;
   const ccPhoneRegex = /^\d{4}-\d{4}$/;
 
@@ -320,6 +334,35 @@ export default function NuevaVentaScreen({ navigation }) {
     setCcNombreError(''); setCcApellidoError(''); setCcDuiError('');
     setCcTelefonoError(''); setCcWhatsappError(''); setCcEmailError('');
     setCcLatError(''); setCcLongError(''); setCcFrenteError(''); setCcReversoError('');
+    setCcMostrarOpcionales(false);
+    setCcDireccion(''); setCcDepartamento(''); setCcMunicipio(''); setCcDistrito(''); setCcNombreConyuge('');
+    setCcRefFam1Nombre(''); setCcRefFam1Telefono(''); setCcRefFam1Parentesco('');
+    setCcRefFam2Nombre(''); setCcRefFam2Telefono(''); setCcRefFam2Parentesco('');
+    setCcRefCon1Nombre(''); setCcRefCon1Telefono(''); setCcRefCon1Trabajo('');
+    setCcRefCon2Nombre(''); setCcRefCon2Telefono(''); setCcRefCon2Trabajo('');
+  };
+
+  const ccCamposOpcionales = () => {
+    const campos = {
+      direccion: ccDireccion.trim(),
+      departamento: ccDepartamento.trim(),
+      municipio: ccMunicipio.trim(),
+      distrito: ccDistrito.trim(),
+      nombre_conyuge: ccNombreConyuge.trim(),
+      ref_fam1_nombre: ccRefFam1Nombre.trim(),
+      ref_fam1_telefono: ccRefFam1Telefono.trim(),
+      ref_fam1_parentesco: ccRefFam1Parentesco.trim(),
+      ref_fam2_nombre: ccRefFam2Nombre.trim(),
+      ref_fam2_telefono: ccRefFam2Telefono.trim(),
+      ref_fam2_parentesco: ccRefFam2Parentesco.trim(),
+      ref_con1_nombre: ccRefCon1Nombre.trim(),
+      ref_con1_telefono: ccRefCon1Telefono.trim(),
+      ref_con1_trabajo: ccRefCon1Trabajo.trim(),
+      ref_con2_nombre: ccRefCon2Nombre.trim(),
+      ref_con2_telefono: ccRefCon2Telefono.trim(),
+      ref_con2_trabajo: ccRefCon2Trabajo.trim(),
+    };
+    return Object.fromEntries(Object.entries(campos).filter(([, v]) => v));
   };
 
   useEffect(() => {
@@ -327,6 +370,53 @@ export default function NuevaVentaScreen({ navigation }) {
       if (raw) { try { setCcEmailRequerido(!!JSON.parse(raw).emailRequerido); } catch {} }
     });
   }, []);
+
+  // Precarga cliente y carrito cuando se abre en modo corrección — una sola
+  // vez al entrar, no en cada re-render (el usuario puede seguir editando
+  // el carrito libremente después de esto).
+  useEffect(() => {
+    if (!modoEdicion || !ventaInicial) return;
+
+    if (ventaInicial.cliente) {
+      setCliente({
+        id: ventaInicial.cliente.id || null,
+        nombre: ventaInicial.cliente.id
+          ? `${ventaInicial.cliente.nombre || ''} ${ventaInicial.cliente.apellido || ''}`.trim()
+          : 'Consumidor Final',
+        whatsapp: ventaInicial.cliente.telefono_whatsapp || ventaInicial.cliente.telefono_normal || null,
+        dui: ventaInicial.cliente.dui || null,
+      });
+    }
+
+    const carritoInicial = (ventaInicial.detalles || []).map(d => {
+      const cuotas = Number(d.cuotas || 0) || undefined;
+      const precioCuota = d.precio_cuota !== null && d.precio_cuota !== undefined ? Number(d.precio_cuota) : undefined;
+      // Igual que al agregar un producto nuevo: precio_venta guarda el
+      // TOTAL de la línea (ya multiplicado por cuotas si es crédito), no
+      // el precio por unidad — así calcularTotalItem() y el envío final
+      // funcionan igual que con un producto agregado desde cero.
+      const precioVenta = cuotas
+        ? cuotas * (precioCuota || 0)
+        : Number(d.precio_unitario || 0);
+
+      return {
+        id: d.producto_id,
+        nombre: d.producto?.nombre || `Producto ${d.producto_id}`,
+        codigo: d.producto?.codigo || null,
+        cantidad: Number(d.cantidad || 1),
+        cuotas,
+        precio_cuota: precioCuota,
+        precio_venta: precioVenta,
+        planLabel: cuotas ? `${cuotas} cuotas de ${fmt(precioCuota)}` : undefined,
+      };
+    });
+    setCarrito(carritoInicial);
+
+    if (ventaInicial.prima > 0) {
+      setPago(String(ventaInicial.prima));
+      setUsarPrima(true);
+    }
+  }, [modoEdicion, ventaInicial]);
 
   const ccHandleDuiChange = (t) => {
     const f = ccFormatDui(t); setCcDui(f);
@@ -357,7 +447,7 @@ export default function NuevaVentaScreen({ navigation }) {
           }
         } catch(e){ console.warn('OCR:',e.message); } finally { setCcScanningOcr(false); }
       }
-    } catch(e){ Alert.alert('Error','No se pudo abrir la cámara.'); }
+    } catch(e){ Alert.alert('Error','No se pudo abrir la cámara: ' + (e?.message || String(e))); }
   };
 
   const ccTomarFoto = async (tipo) => {
@@ -371,7 +461,7 @@ export default function NuevaVentaScreen({ navigation }) {
         else if (tipo === 'dui_reverso') { setCcDuiReverso(file); setCcReversoError(''); }
         else if (tipo === 'casa')   { setCcFotoCasa(file); }
       }
-    } catch(e){ Alert.alert('Error','No se pudo tomar la foto.'); }
+    } catch(e){ Alert.alert('Error','No se pudo tomar la foto: ' + (e?.message || String(e))); }
   };
 
   const ccGetLocation = async () => {
@@ -396,8 +486,8 @@ export default function NuevaVentaScreen({ navigation }) {
     if (!ccPhoneRegex.test(ccWhatsapp.trim()))  { setCcWhatsappError('Formato: 1234-5678'); ok=false; }
     if (!ccLatitud.trim())  { setCcLatError('Requerido'); ok=false; }
     if (!ccLongitud.trim()) { setCcLongError('Requerido'); ok=false; }
-    if (!ccDuiFrente)  { setCcFrenteError('Toma la foto del frente del DUI'); ok=false; }
-    if (!ccDuiReverso) { setCcReversoError('Toma la foto del reverso del DUI'); ok=false; }
+    // Las fotos del DUI son opcionales — a veces la cámara falla y no debe
+    // impedir crear el cliente por eso. Se puede completar después.
     if (ccEmailRequerido && !ccEmail.trim()) { setCcEmailError('El email es requerido'); ok=false; }
     else if (ccEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ccEmail.trim())) { setCcEmailError('Formato inválido'); ok=false; }
     return ok;
@@ -416,6 +506,7 @@ export default function NuevaVentaScreen({ navigation }) {
       formData.append('latitud', ccLatitud.trim());
       formData.append('longitud', ccLongitud.trim());
       if (ccEmail.trim()) formData.append('email', ccEmail.trim());
+      Object.entries(ccCamposOpcionales()).forEach(([key, value]) => formData.append(key, value));
       const appendImg = (field, file) => { if(file?.uri) formData.append(field, { uri:file.uri, name:file.name||`${field}.jpg`, type:'image/jpeg' }); };
       appendImg('dui_foto_frente', ccDuiFrente);
       appendImg('dui_foto_reverso', ccDuiReverso);
@@ -436,6 +527,7 @@ export default function NuevaVentaScreen({ navigation }) {
         await offlineQueue.enqueueRequest({ method:'POST', url:'/clientes', label:'Crear cliente', useFormData:true,
           data:{ nombre:ccNombre.trim(), apellido:ccApellido.trim(), dui:ccDui.trim(), telefono_normal:ccTelefono.trim(),
             telefono_whatsapp:ccWhatsapp.trim(), latitud:ccLatitud.trim(), longitud:ccLongitud.trim(),
+            ...ccCamposOpcionales(),
             ...(ccDuiFrente&&{dui_foto_frente:ccDuiFrente}), ...(ccDuiReverso&&{dui_foto_reverso:ccDuiReverso}), ...(ccFotoCasa&&{foto_casa:ccFotoCasa}) } });
         const nombreCompleto = `${ccNombre} ${ccApellido}`.trim();
         setCliente({ id: null, nombre: nombreCompleto, whatsapp: ccWhatsapp||ccTelefono||null, dui: ccDui||null });
@@ -509,257 +601,33 @@ export default function NuevaVentaScreen({ navigation }) {
 
   // ── Cargar categorías ─────────────────────────────────────────────────────
   useEffect(() => {
-    api.get('/categorias')
-      .then(({ data }) => setCategorias(data))
-      .catch(async (error) => {
-        const isOffline = esErrorTransitorio(error);
-        if (isOffline) {
-          const categoriasLocales = await localDb.getLocalCategories();
-          if (Array.isArray(categoriasLocales) && categoriasLocales.length > 0) {
-            setCategorias(categoriasLocales);
-          }
-        }
-      });
-  }, []);
-
-  // ── Cargar imágenes del ticket con caché ───────────────────────────────────
-  const loadTicketImages = useCallback(async () => {
-    // Si ya tenemos las imágenes, no las cargamos de nuevo
-    if (ticketLogoUri && ticketQrUri) return;
-
-    const toBase64 = async (uri) => {
-      if (!uri) return null;
-      if (Platform.OS === 'web') {
-        try {
-          const response = await fetch(uri);
-          const blob = await response.blob();
-          const buffer = await blob.arrayBuffer();
-          const bytes = new Uint8Array(buffer);
-          let binary = '';
-          const chunkSize = 0x8000;
-          for (let i = 0; i < bytes.length; i += chunkSize) {
-            binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-          }
-          return btoa(binary);
-        } catch (err) {
-          console.warn('No se pudo convertir imagen a base64 en web:', err);
-          return null;
-        }
-      }
-      return FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
-    };
-
-    try {
-      const logoAsset = Asset.fromModule(require('../assets/img/logo.png'));
-      const qrAsset = Asset.fromModule(require('../assets/img/OC25Mc.png'));
-      if (!logoAsset.localUri) await logoAsset.downloadAsync();
-      if (!qrAsset.localUri) await qrAsset.downloadAsync();
-
-      const logoUri = logoAsset.localUri || logoAsset.uri;
-      const qrUri = qrAsset.localUri || qrAsset.uri;
-      const logoBase64 = logoUri ? await toBase64(logoUri) : null;
-      const qrBase64 = qrUri ? await toBase64(qrUri) : null;
-
-      setTicketLogoUri(logoBase64 ? `data:image/png;base64,${logoBase64}` : logoUri || null);
-      setTicketQrUri(qrBase64 ? `data:image/png;base64,${qrBase64}` : qrUri || null);
-    } catch (e) {
-      console.warn('Error cargando imágenes del ticket:', e);
-    }
-  }, [ticketLogoUri, ticketQrUri]);
-
-  useEffect(() => {
-    loadTicketImages();
-  }, [loadTicketImages]);
-
-  // ── Imprimir ticket ────────────────────────────────────────────────────────
-  const printTicket = useCallback(async (sale, totals, cartItems) => {
-    setPrinting(true);
-    
-    try {
-      await loadTicketImages();
-      
-      const date = new Date(sale.fecha_venta || Date.now()).toLocaleString();
-      const clienteNombre = sale.cliente?.nombre || cliente?.nombre || 'Consumidor Final';
-      const tipoPagoLabel = (sale.tipo_pago || totals.tipoPago) === 'credito' ? 'Crédito' : 'Contado';
-      const detalles = sale.detalles || cartItems || [];
-      const cajaNombre = escapeHtml(String(sale.caja || sale.caja_numero || sale.caja_id || '01'));
-      const sucursalNombre = escapeHtml(String(sale.sucursal?.nombre || sale.sucursal_nombre || sale.sucursal || user?.sucursales?.[0]?.nombre || 'Casa Matriz'));
-      const vendedorNombre = escapeHtml(String(sale.vendedor?.nombre || sale.vendedor || user?.name || user?.nombre || 'Vendedor'));
-      const ventaNumero = escapeHtml(String(sale.numero_venta || sale.id || 'N/A'));
-      
-      const logoHtml = ticketLogoUri ? `<div style="text-align:center; margin-bottom:12px"><img src="${ticketLogoUri}" style="max-width:180px; width:180px; height:auto; display:block; margin:0 auto" /></div>` : '';
-      const qrHtml = ticketQrUri ? `<div style="background:#f0f0f0; color:#555; text-align:center; padding:18px 0; font-size:12px; margin-bottom:10px"><img src="${ticketQrUri}" style="max-width:180px; width:180px; height:auto; display:block; margin:0 auto" /></div>` : '<div style="background:#f0f0f0; color:#555; text-align:center; padding:18px 0; font-size:12px; margin-bottom:10px">[ QR ]</div>';
-
-      const itemsHtml = detalles.map(d => {
-        const name = escapeHtml(d.nombre || d.producto?.nombre || `ID:${d.producto_id || ''}`);
-        const priceNormal = parseFloat(d.precio_unitario || d.precio_venta || 0);
-        const qty = Number(d.cantidad || 1);
-        const planEnabled = Number(d.cuotas || 0) > 0 && Number(d.precio_cuota || 0) > 0;
-        const cambioPrecioVendedor = String(d.planLabel || '').toLowerCase().includes('cambio de precio');
-
-        let priceText = `<div style="font-size:12px; margin-top:3px;">Precio: ${fmt(priceNormal)}</div>`;
-        let planText = '';
-
-        if (planEnabled) {
-          priceText = `<div style="font-size:12px; margin-top:3px;">Precio cuota: ${fmt(d.precio_cuota)}</div>`;
-          planText = `<div style="margin-top:4px; font-size:12px; font-weight:700;">Plan de financiamiento:</div><div style="font-size:12px;">${d.cuotas} cuotas de ${fmt(d.precio_cuota)}</div>`;
-        } else if (cambioPrecioVendedor) {
-          priceText = `<div style="font-size:12px; margin-top:3px;">Precio vendedor: ${fmt(priceNormal)}</div>`;
-        }
-
-        return `
-          <div style="margin-bottom:8px;">
-            <div style="font-size:13px; font-weight:700;">${name}</div>
-            <div style="font-size:12px; margin-top:3px; color:#555">Cantidad: ${qty}</div>
-            ${priceText}
-            ${planText}
-          </div>
-          <div style="border-top:1px dashed #555; margin:8px 0"></div>
-        `;
-      }).join('');
-
-      const html = `
-        <html>
-        <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <style>
-            * { box-sizing: border-box; }
-            body{ font-family: Arial, Helvetica, sans-serif; font-size:14px; width:100%; max-width:380px; margin:0 auto; padding:12px; }
-            h3{ margin:0; font-size:22px }
-            .center{ text-align:center }
-            .right{ text-align:right }
-            .small{ font-size:13px; color:#555 }
-            .label{ font-size:14px; font-weight:700 }
-            .divider{ border-top:2px dashed #333; margin:12px 0 }
-            .section-title{ font-size:14px; font-weight:700; margin-bottom:8px }
-            .text-sm{ font-size:13px; }
-            .product-name{ font-size:15px; font-weight:700; }
-            td{ vertical-align: top; padding: 4px 2px; font-size: 13px; word-break: break-word; }
-            table{ width: 100%; border-collapse: collapse; table-layout: fixed; }
-            td:first-child{ width: 60%; }
-            td:last-child{ width: 40%; text-align: right; }
-          </style>
-        </head>
-        <body>
-          ${logoHtml}
-          <div class="center">
-            <div style="font-size:22px; font-weight:800; margin-bottom:6px">DISTRIBUIDORA BM</div>
-            <div style="font-size:13px; margin-bottom:4px; color:#555">Muebles • Electrodomésticos</div>
-          </div>
-          <div style="font-size:12px; margin-top:8px; line-height:18px; color:#555">
-            Teléfono: +503 7777-7777<br />
-            WhatsApp: +503 7777-7777<br />
-            Correo: ventas@bmdistribuidora.com<br />
-            Web: www.bmdistribuidora.com
-          </div>
-          <div style="font-size:12px; margin-top:8px; color:#555">Dirección:<br />Usulután, El Salvador</div>
-          <div class="divider"></div>
-          <div style="font-size:14px; font-weight:700; text-align:center; margin-bottom:8px">━ TICKET DE VENTA ━</div>
-          <div style="font-size:12px; margin-bottom:3px"><strong>Venta No:</strong> ${ventaNumero}</div>
-          <div style="font-size:12px; margin-bottom:3px"><strong>Fecha:</strong> ${escapeHtml(date)}</div>
-          <div style="font-size:12px; margin-bottom:3px"><strong>Caja:</strong> ${cajaNombre}</div>
-          <div style="font-size:12px; margin-bottom:3px"><strong>Sucursal:</strong> ${sucursalNombre}</div>
-          <div style="font-size:12px; margin-top:6px"><strong>Vendedor:</strong> ${vendedorNombre}</div>
-          <div style="font-size:12px; margin-top:4px"><strong>Cliente:</strong> ${escapeHtml(clienteNombre)}</div>
-          <div class="divider"></div>
-          <div style="font-size:16px; font-weight:700; margin-bottom:10px">PRODUCTOS</div>
-          ${itemsHtml}
-          <div class="divider"></div>
-          <table>
-            <tr><td style="font-size:13px">Subtotal</td><td style="text-align:right;font-weight:600;font-size:13px">${fmt(totals.subtotal)}</td></tr>
-            <tr><td style="font-size:13px">Descuento</td><td style="text-align:right;font-weight:600;font-size:13px">${fmt(totals.descVal)}</td></tr>
-            <tr><td style="font-size:16px;font-weight:800"><strong>TOTAL</strong></td><td style="text-align:right;font-size:16px;font-weight:800">${fmt(totals.total)}</td></tr>
-          </table>
-          <div class="divider"></div>
-          <div style="font-size:13px; margin-bottom:6px"><strong>Forma de pago:</strong> ${escapeHtml(tipoPagoLabel)}</div>
-          <table>
-            ${totals.tipoPago === 'credito'
-              ? `<tr><td style="font-weight:700;font-size:13px">Prima inicial</td><td style="text-align:right;font-weight:800;font-size:14px">${totals.pagoVal > 0 ? fmt(totals.pagoVal) : 'Sin prima'}</td></tr>`
-              : `<tr><td style="font-size:13px">Pago recibido</td><td style="text-align:right;font-weight:600;font-size:13px">${fmt(totals.pagoVal)}</td></tr>
-                 <tr><td style="font-size:13px">Vuelto</td><td style="text-align:right;font-weight:600;font-size:13px">${fmt(totals.vuelto)}</td></tr>`
+    (async () => {
+      // Mismo criterio que en cargarClientes: si nunca se ha guardado nada
+      // localmente en este dispositivo, el respaldo offline está vacío —
+      // mejor esperar el timeout normal que fallar rápido a los 8s y
+      // quedarse sin categorías sin ningún aviso.
+      const localesPrevias = await localDb.getLocalCategories().catch(() => []);
+      const timeoutConfig = (localesPrevias?.length > 0) ? { timeout: TIMEOUT_LECTURA_CACHE } : undefined;
+      api.get('/categorias', timeoutConfig)
+        .then(({ data }) => setCategorias(data))
+        .catch(async (error) => {
+          const isOffline = esErrorTransitorio(error);
+          if (isOffline) {
+            const categoriasLocales = await localDb.getLocalCategories();
+            if (Array.isArray(categoriasLocales) && categoriasLocales.length > 0) {
+              setCategorias(categoriasLocales);
             }
-          </table>
-          <div class="divider"></div>
-          <div style="font-size:14px; font-weight:700; margin-bottom:6px">GARANTÍA Y CONSULTAS</div>
-          <div style="font-size:13px; line-height:19px; margin-bottom:10px; color:#555">
-            Conserve este comprobante para cambios, garantías y consultas.<br />
-            Escanee el código QR para:<br />
-            • Consultar su compra<br />
-            • Ver estado de cuotas<br />
-            • Descargar comprobante<br />
-            • Contactar soporte
-          </div>
-          ${qrHtml}
-          <div class="divider"></div>
-          <div style="text-align:center; font-size:15px; font-weight:700; margin-bottom:6px">¡Gracias por su compra!</div>
-          <div style="text-align:center; font-size:13px; color:#555">DISTRIBUIDORA BM<br />"Equipando su hogar con calidad"</div>
-        </body>
-        </html>
-      `;
-
-      await Print.printAsync({ html });
-    } catch (error) {
-      console.error('Error printing ticket:', error);
-      Alert.alert('Error', 'No se pudo imprimir el ticket');
-    } finally {
-      setPrinting(false);
-    }
-  }, [ticketLogoUri, ticketQrUri, cliente?.nombre, user, loadTicketImages]);
-
-  // ── Impresión ESC/POS ──────────────────────────────────────────────────────
-  const attemptEscPosPrint = useCallback(async (sale) => {
-    try {
-      // Intentar con dirección guardada
-      const addr = await escpos.getSavedPrinterAddress().catch(() => null);
-      if (addr) {
-        try {
-          await escpos.connect(addr);
-          await escpos.printSaleEscPos(sale);
-          return true;
-        } catch (e) {
-          console.warn('Fallo al conectar/usar impresora guardada:', e?.message || e);
-        }
-      }
-
-      // Escanear dispositivos y probar el primero
-      const devices = await escpos.listBluetoothDevices();
-      let list = devices;
-      if (devices && typeof devices === 'object' && !Array.isArray(devices)) {
-        list = devices.paired || devices.devices || Object.values(devices);
-      }
-      if (Array.isArray(list) && list.length > 0) {
-        const first = list[0];
-        const address = first.address || first.deviceAddress || first.mac || first;
-        if (address) {
-          await escpos.connect(address);
-          await escpos.printSaleEscPos(sale);
-          await escpos.savePrinterAddress(address).catch(() => {});
-          return true;
-        }
-      }
-    } catch (e) {
-      console.warn('Error al escanear/usar dispositivos Bluetooth:', e?.message || e);
-    }
-    return false;
+          }
+        });
+    })();
   }, []);
-
-  // ── Guardar configuración de impresora ─────────────────────────────────────
-  const savePrinter = useCallback(async () => {
-    if (!printerAddr.trim()) {
-      Alert.alert('Error', 'Ingrese una dirección válida');
-      return;
-    }
-    await escpos.savePrinterAddress(printerAddr).catch(() => {});
-    setPrinterModalVisible(false);
-    Alert.alert('Impresora guardada', `Dirección: ${printerAddr}`);
-  }, [printerAddr]);
 
   // ── Cargar asignación activa ──────────────────────────────────────────────
   const cargarAsignacionHoy = useCallback(async () => {
     setAsignMsg('');
     setLoadingAsignacion(true);
     try {
-      const { data } = await api.get('/asignacion/hoy');
+      const { data } = await api.get('/asignacion/hoy', { timeout: TIMEOUT_LECTURA_CACHE });
       const asignacion = data.asignacion;
 
       if (!asignacion || !asignacion.productos || asignacion.productos.length === 0) {
@@ -857,11 +725,29 @@ export default function NuevaVentaScreen({ navigation }) {
   useFocusEffect(useCallback(() => { cargarAsignacionHoy(); }, [cargarAsignacionHoy]));
 
   // ── Cargar clientes ───────────────────────────────────────────────────────
+  // Si este teléfono/usuario nunca ha tenido clientes guardados localmente
+  // (típico en una instalación o inicio de sesión nuevo), el respaldo local
+  // al que cae el catch de abajo está VACÍO — así que fallar rápido a los
+  // 8s solo produce una lista vacía sin ningún aviso visible (parece que
+  // "no hay clientes" cuando en realidad la búsqueda ni terminó de
+  // responder). Se revisa una sola vez si hay algo útil en la caché local;
+  // si no hay nada, se usa el timeout normal en vez del corto.
+  const hayCacheLocalClientes = useRef(null); // null = todavía no se sabe
   const cargarClientes = useCallback(async (q = '') => {
     try {
-      let qs = 'per_page=30';
+      if (hayCacheLocalClientes.current === null) {
+        const locales = await localDb.getLocalClients().catch(() => []);
+        hayCacheLocalClientes.current = Array.isArray(locales) && locales.length > 0;
+      }
+      // contexto=venta le dice al servidor que, si no hay texto de búsqueda,
+      // priorice clientes a los que este vendedor ya le vendió hoy — tiene
+      // sentido acá (buscando un cliente recurrente de la misma jornada),
+      // pero no en otras pantallas que también listan /clientes (ej.
+      // Preventa), donde ese acotamiento no aplica.
+      let qs = 'per_page=30&contexto=venta';
       if (q) qs += `&q=${encodeURIComponent(q)}`;
-      const { data } = await api.get(`/clientes?${qs}`);
+      const timeoutConfig = hayCacheLocalClientes.current ? { timeout: TIMEOUT_LECTURA_CACHE } : undefined;
+      const { data } = await api.get(`/clientes?${qs}`, timeoutConfig);
       setClientes(Array.isArray(data) ? data : (data.data || []));
     } catch (error) {
       const isOffline = esErrorTransitorio(error);
@@ -1033,11 +919,13 @@ export default function NuevaVentaScreen({ navigation }) {
       return;
     }
 
-    // Cliente es requerido
-    if (!cliente.id) {
+    // Cliente es requerido, salvo "Consumidor Final" — y eso solo se permite
+    // si la venta es 100% al contado (crédito/mixto siempre necesita un
+    // cliente registrado, porque respalda el pagaré y la cobranza).
+    if (!cliente.id && (cartTotals.tipoPago === 'credito' || cartTotals.esMixto)) {
       Alert.alert(
         '⚠️ Cliente requerido',
-        'Debes seleccionar un cliente antes de confirmar la venta.',
+        'Una venta a crédito necesita un cliente registrado (no "Consumidor Final").',
         [{ text: 'Seleccionar cliente', onPress: () => setShowClienteModal(true) }]
       );
       return;
@@ -1057,16 +945,71 @@ export default function NuevaVentaScreen({ navigation }) {
     setConfirmModalVisible(true);
   }, [carrito.length, cliente.id, cliente.dui, cartTotals.tipoPago, cartTotals.esMixto]);
 
+  // ── Corregir venta existente (modo edición) ─────────────────────────────────
+  const enviarCorreccion = useCallback(async () => {
+    const clienteId = cliente.id || 0;
+    const payload = {
+      motivo: motivoCorreccion.trim(),
+      cliente_id: clienteId,
+      prima: cartTotals.pagoVal > 0 ? cartTotals.pagoVal : 0,
+      ...(cartTotals.descPct > 0 ? { descuento_porcentaje: parseFloat(cartTotals.descPct.toFixed(4)) } : {}),
+      detalles: carrito.map(i => {
+        const esCredito = Number(i.cuotas) > 0;
+        const precio_unitario = esCredito && i.precio_cuota
+          ? Number(i.cuotas) * Number(i.precio_cuota)
+          : parseFloat(i.precio_venta || 0);
+
+        return {
+          producto_id: i.id,
+          cantidad: i.cantidad,
+          precio_unitario,
+          descuento_porcentaje: 0,
+          tipo_pago: esCredito ? 'credito' : 'contado',
+          ...(esCredito ? { cuotas: Number(i.cuotas), precio_cuota: Number(i.precio_cuota) } : {}),
+        };
+      }),
+    };
+
+    setSubmitting(true);
+    try {
+      await api.patch(`/ventas/${ventaEditId}`, payload);
+      limpiarVenta();
+      setMotivoCorreccion('');
+      Alert.alert('✅ Venta corregida', 'Los cambios se guardaron correctamente.', [
+        { text: 'OK', onPress: () => navigation.goBack() },
+      ]);
+    } catch (e) {
+      Alert.alert('No se pudo corregir', e?.response?.data?.mensaje || e.message || 'Intenta de nuevo.');
+    } finally {
+      setSubmitting(false);
+    }
+  }, [cliente, cartTotals, carrito, motivoCorreccion, ventaEditId, navigation, limpiarVenta]);
+
   // ── Finalizar venta (enviar al servidor) ───────────────────────────────────
   const finalizarVenta = useCallback(async () => {
+    if (modoEdicion && !motivoCorreccion.trim()) {
+      Alert.alert('Falta el motivo', 'Escribe brevemente qué se corrigió antes de guardar.');
+      return;
+    }
     setConfirmModalVisible(false);
+
+    if (modoEdicion) {
+      await enviarCorreccion();
+      return;
+    }
 
     // Cliente_id: usar 0 para Consumidor Final (si id es null)
     const clienteId = cliente.id || 0;
 
+    // Se genera UNA vez, antes del primer intento, y se reutiliza si la venta
+    // termina encolada offline — así el servidor puede reconocer un reintento
+    // de la MISMA venta (ej. tras un timeout) y no crear una venta duplicada.
+    const idempotencyKey = `venta-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
     const payload = {
       sucursal_id: sucursalId,
       tipo_pago: cartTotals.tipoPago,
+      idempotency_key: idempotencyKey,
       ...(cartTotals.tipoPago === 'credito' ? { dias_credito: 30 } : {}),
       cliente_id: clienteId,
       ...(cartTotals.pagoVal > 0
@@ -1137,6 +1080,10 @@ export default function NuevaVentaScreen({ navigation }) {
             total: cartTotals.total,
             subtotal: cartTotals.subtotal,
             fecha_venta: new Date().toISOString(),
+            // Sin conexión el servidor no puede confirmar el vendedor todavía
+            // — se usa el nombre del usuario logueado en este dispositivo,
+            // que es quien realmente está haciendo la venta.
+            vendedorNombre: user?.name || user?.nombre || '',
           };
           limpiarVenta();
           navigation.replace('VentaRegistrada', {
@@ -1156,15 +1103,7 @@ export default function NuevaVentaScreen({ navigation }) {
     } finally {
       setSubmitting(false);
     }
-  }, [carrito, cartTotals, sucursalId, cliente.id, asignacionId, limpiarVenta, printTicket, attemptEscPosPrint]);
-
-  // ── Restaurar dirección de impresora guardada ─────────────────────────────
-  useEffect(() => {
-    (async () => {
-      const addr = await escpos.getSavedPrinterAddress().catch(() => null);
-      if (addr) setPrinterAddr(addr);
-    })();
-  }, []);
+  }, [carrito, cartTotals, sucursalId, cliente.id, asignacionId, limpiarVenta, modoEdicion, motivoCorreccion, enviarCorreccion]);
 
   // ── Productos visibles (filtrados) ───────────────────────────────────────
   const productosVisibles = useMemo(() => {
@@ -1184,12 +1123,14 @@ export default function NuevaVentaScreen({ navigation }) {
     <View style={s.root}>
       <StatusBar barStyle={colors.statusBar} backgroundColor={colors.headerBg} />
 
-      {/* Header */}
-      <View style={s.header}>
+      {/* Header — sin esto quedaba pegado a la barra de estado del
+          teléfono (reloj, señal, batería), tapándose entre sí en equipos
+          con status bar más alta. */}
+      <View style={[s.header, { paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.hBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           <Text style={s.hIcon}>←</Text>
         </TouchableOpacity>
-        <Text style={s.hTitle}>Nueva Venta</Text>
+        <Text style={s.hTitle}>{modoEdicion ? '✏️ Corregir venta' : 'Nueva Venta'}</Text>
         <View style={s.hRight}>
           <View style={[
             s.statusIndicator,
@@ -1197,11 +1138,35 @@ export default function NuevaVentaScreen({ navigation }) {
           ]}>
             <Text style={{ fontSize: 9 }}>{isOnline ? '●' : '●'}</Text>
           </View>
+          {/* Tamaño de letra del catálogo — cada quien lo ajusta a su
+              gusto, queda guardado en este teléfono.
+              Antes usaba blanco fijo (#fff) asumiendo encabezado azul, pero
+              el tema claro tiene encabezado blanco — quedaba invisible
+              (texto blanco sobre fondo blanco). Se usan los colores del
+              tema para que se vea en ambos modos. */}
+          <View style={{ flexDirection: 'row', backgroundColor: colors.surfaceAlt, borderRadius: 6, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' }}>
+            <TouchableOpacity
+              onPress={disminuirTexto}
+              disabled={!puedeDisminuir}
+              style={{ paddingHorizontal: 8, paddingVertical: 6, opacity: puedeDisminuir ? 1 : 0.4 }}
+              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+            >
+              <Text style={{ color: colors.text, fontSize: 11, fontWeight: '800' }}>A-</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={aumentarTexto}
+              disabled={!puedeAumentar}
+              style={{ paddingHorizontal: 8, paddingVertical: 6, opacity: puedeAumentar ? 1 : 0.4, borderLeftWidth: 1, borderLeftColor: colors.border }}
+              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+            >
+              <Text style={{ color: colors.text, fontSize: 14, fontWeight: '800' }}>A+</Text>
+            </TouchableOpacity>
+          </View>
           <TouchableOpacity onPress={abrirConfig} style={[s.hBtn, { backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 6, paddingHorizontal: 8 }]}>
             <Text style={[s.hIcon, { fontSize: 12 }]}>⚙️</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => navigation.navigate('HistorialVentas')} style={[s.hBtn, { backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 6, paddingHorizontal: 8 }]}>
-            <Text style={[s.hIcon, { fontSize: 12 }]}>📋 Historial</Text>
+            <Text style={[s.hIcon, { fontSize: 16 }]}>📋</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => navigation.goBack()} style={s.hBtn}>
             <Text style={[s.hIcon, { fontSize: 18 }]}>✕</Text>
@@ -1393,15 +1358,20 @@ export default function NuevaVentaScreen({ navigation }) {
                 <View style={s.prodImgBox}>
                   <Text style={s.prodEmoji}>📦</Text>
                 </View>
-                <Text style={s.prodNombre} numberOfLines={2}>{item.nombre}</Text>
-                {item.codigo ? <Text style={s.prodCodigo}>{item.codigo}</Text> : null}
+                {/* Sin límite de líneas — muchos productos comparten el mismo
+                    nombre base y solo se diferencian por el color al final
+                    (ej. "Sofá reclinable 3 plazas gris"), que se estaba
+                    cortando con "...". La tarjeta simplemente crece según lo
+                    que necesite el nombre, en vez de truncar. */}
+                <Text style={[s.prodNombre, { fontSize: 11 * escala, lineHeight: 15 * escala, minHeight: 30 * escala }]}>{item.nombre}</Text>
+                {item.codigo ? <Text style={[s.prodCodigo, { fontSize: 9 * escala }]}>{item.codigo}</Text> : null}
                 {item.precios_cuotas && Array.isArray(item.precios_cuotas) && item.precios_cuotas.length > 0 ? (
-                  <Text style={s.prodCuotas}>Pago: contado o cuotas</Text>
+                  <Text style={[s.prodCuotas, { fontSize: 9 * escala }]}>Pago: contado o cuotas</Text>
                 ) : null}
                 <View style={s.prodFooter}>
-                  <Text style={s.prodPrecio}>{fmt(item.precio_venta)}</Text>
+                  <Text style={[s.prodPrecio, { fontSize: 12 * escala }]}>{fmt(item.precio_venta)}</Text>
                   <View style={s.stockBadge}>
-                    <Text style={s.stockTxt}>{(item.stock_disponible ?? item.stock ?? 0) > 0 ? `Stock: ${item.stock_disponible}` : 'Sin stock'}</Text>
+                    <Text style={[s.stockTxt, { fontSize: 9 * escala }]}>{(item.stock_disponible ?? item.stock ?? 0) > 0 ? `Stock: ${item.stock_disponible}` : 'Sin stock'}</Text>
                   </View>
                 </View>
                 <TouchableOpacity
@@ -1578,12 +1548,12 @@ export default function NuevaVentaScreen({ navigation }) {
 
           {/* Botón finalizar */}
           <TouchableOpacity
-            style={[s.finalizarBtn, (submitting || printing) && { opacity: 0.7 }]}
+            style={[s.finalizarBtn, submitting && { opacity: 0.7 }]}
             onPress={confirmarVenta}
             activeOpacity={0.85}
-            disabled={submitting || printing || carrito.length === 0}
+            disabled={submitting || carrito.length === 0}
           >
-            {submitting || printing ? (
+            {submitting ? (
               <ActivityIndicator color="#fff" size="small" />
             ) : (
               <Text style={s.finalizarTxt}>FINALIZAR VENTA</Text>
@@ -1683,44 +1653,11 @@ export default function NuevaVentaScreen({ navigation }) {
         </View>
       </Modal>
 
-      {/* Modal configuración impresora */}
-      <Modal visible={printerModalVisible} animationType="slide" transparent>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 20 }}>
-          <View style={{ backgroundColor: colors.card, borderRadius: 8, padding: 12 }}>
-            <Text style={{ fontSize: 16, fontWeight: '600', marginBottom: 8, color: colors.text }}>Configurar impresora</Text>
-            <Text style={{ marginBottom: 6, color: colors.textMuted }}>Introduce IP:PUERTO (ej. 192.168.1.100:9100) o identificador USB</Text>
-            <TextInput 
-              value={printerAddr} 
-              onChangeText={setPrinterAddr} 
-              placeholder="192.168.1.100:9100 or usb:..." 
-              placeholderTextColor={colors.textMuted}
-              style={{ 
-                borderWidth: 1, 
-                borderColor: colors.border, 
-                padding: 8, 
-                borderRadius: 6, 
-                marginBottom: 10,
-                color: colors.text,
-                backgroundColor: colors.surface
-              }} 
-            />
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
-              <TouchableOpacity onPress={() => setPrinterModalVisible(false)} style={{ padding: 8, marginRight: 8 }}>
-                <Text style={{ color: colors.text }}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={savePrinter} style={{ padding: 8 }}>
-                <Text style={{ color: colors.accent }}>Guardar</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
       {/* Modal de confirmación de venta */}
       <Modal visible={confirmModalVisible} animationType="fade" transparent>
         <View style={s.confirmModalOverlay}>
           <View style={[s.confirmModal, { backgroundColor: colors.surface }]}>
-            <Text style={[s.confirmTitle, { color: colors.text }]}>📋 Confirmar Venta</Text>
+            <Text style={[s.confirmTitle, { color: colors.text }]}>{modoEdicion ? '✏️ Confirmar corrección' : '📋 Confirmar Venta'}</Text>
 
             <ScrollView style={s.confirmContent} showsVerticalScrollIndicator={false}>
               {/* Cliente */}
@@ -1777,6 +1714,25 @@ export default function NuevaVentaScreen({ navigation }) {
                   </>
                 )}
               </View>
+
+              {/* Motivo — solo al corregir una venta existente */}
+              {modoEdicion && (
+                <View style={s.confirmSection}>
+                  <Text style={[s.confirmLabel, { color: colors.textMuted }]}>Motivo de la corrección *</Text>
+                  <TextInput
+                    style={{
+                      borderWidth: 1, borderColor: colors.border, borderRadius: 10,
+                      padding: 10, fontSize: 14, color: colors.text, minHeight: 60,
+                      textAlignVertical: 'top', marginTop: 4,
+                    }}
+                    value={motivoCorreccion}
+                    onChangeText={setMotivoCorreccion}
+                    placeholder="Ej: Se quitó producto de más, prima corregida a $10"
+                    placeholderTextColor={colors.textMuted}
+                    multiline
+                  />
+                </View>
+              )}
             </ScrollView>
 
             {/* Botones */}
@@ -1791,8 +1747,11 @@ export default function NuevaVentaScreen({ navigation }) {
               <TouchableOpacity
                 style={[s.confirmBtn, s.confirmBtnConfirm, { backgroundColor: colors.accent }]}
                 onPress={finalizarVenta}
+                disabled={submitting}
               >
-                <Text style={{ color: '#fff', fontWeight: '700' }}>✓ Confirmar</Text>
+                <Text style={{ color: '#fff', fontWeight: '700' }}>
+                  {submitting ? 'Guardando...' : modoEdicion ? '✓ Guardar corrección' : '✓ Confirmar'}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1922,7 +1881,7 @@ export default function NuevaVentaScreen({ navigation }) {
 
             {/* Fotos DUI */}
             <View style={s.ccCard}>
-              <Text style={[s.ccCardTitle, { color: colors.text }]}>🪪 Fotos del DUI <Text style={{ fontSize:11, fontWeight:'400', color: colors.textMuted }}>* Ambos lados</Text></Text>
+              <Text style={[s.ccCardTitle, { color: colors.text }]}>🪪 Fotos del DUI <Text style={{ fontSize:11, fontWeight:'400', color: colors.textMuted }}>(opcional)</Text></Text>
               <View style={{ flexDirection:'row', gap:10 }}>
                 <TouchableOpacity style={[s.ccPhotoCard, { borderColor: ccDuiFrente?colors.accent:ccFrenteError?'#dc2626':colors.border, backgroundColor: ccDuiFrente?(colors.accent+'12'):colors.surface }]} onPress={() => ccTomarFoto('dui_frente')}>
                   <Text style={{ fontSize:26 }}>{ccDuiFrente ? '✓' : '📸'}</Text>
@@ -1943,6 +1902,53 @@ export default function NuevaVentaScreen({ navigation }) {
                 <Text style={{ fontSize:26 }}>{ccFotoCasa ? '✓' : '📷'}</Text>
                 <Text style={{ fontSize:11, color: colors.text, marginTop:4 }}>{ccFotoCasa ? 'Foto tomada (toca para cambiar)' : 'Tomar foto de la casa'}</Text>
               </TouchableOpacity>
+            </View>
+
+            {/* Dirección y referencias personales (opcional) */}
+            <View style={s.ccCard}>
+              <TouchableOpacity
+                style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center' }}
+                onPress={() => setCcMostrarOpcionales(v => !v)}
+              >
+                <Text style={[s.ccCardTitle, { color: colors.text, marginBottom:0 }]}>🏘️ Dirección y referencias</Text>
+                <Text style={{ fontSize:11, color: colors.textMuted, fontStyle:'italic' }}>{ccMostrarOpcionales ? '▲ Ocultar' : '▼ Opcional'}</Text>
+              </TouchableOpacity>
+
+              {ccMostrarOpcionales && (
+                <View style={{ marginTop:12 }}>
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]}
+                    placeholder="Dirección (calle, colonia, número de casa)" placeholderTextColor={colors.textMuted}
+                    value={ccDireccion} onChangeText={setCcDireccion} multiline />
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]}
+                    placeholder="Departamento" placeholderTextColor={colors.textMuted} value={ccDepartamento} onChangeText={setCcDepartamento} />
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]}
+                    placeholder="Municipio" placeholderTextColor={colors.textMuted} value={ccMunicipio} onChangeText={setCcMunicipio} />
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]}
+                    placeholder="Distrito" placeholderTextColor={colors.textMuted} value={ccDistrito} onChangeText={setCcDistrito} />
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]}
+                    placeholder="Nombre del cónyuge" placeholderTextColor={colors.textMuted} value={ccNombreConyuge} onChangeText={setCcNombreConyuge} />
+
+                  <Text style={{ fontSize:12, fontWeight:'700', color: colors.accent, marginTop:10, marginBottom:6 }}>👨‍👩‍👧 Referencia familiar 1</Text>
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]} placeholder="Nombre" placeholderTextColor={colors.textMuted} value={ccRefFam1Nombre} onChangeText={setCcRefFam1Nombre} />
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]} placeholder="Teléfono" placeholderTextColor={colors.textMuted} value={ccRefFam1Telefono} onChangeText={setCcRefFam1Telefono} keyboardType="phone-pad" />
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]} placeholder="Parentesco" placeholderTextColor={colors.textMuted} value={ccRefFam1Parentesco} onChangeText={setCcRefFam1Parentesco} />
+
+                  <Text style={{ fontSize:12, fontWeight:'700', color: colors.accent, marginTop:10, marginBottom:6 }}>👨‍👩‍👧 Referencia familiar 2</Text>
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]} placeholder="Nombre" placeholderTextColor={colors.textMuted} value={ccRefFam2Nombre} onChangeText={setCcRefFam2Nombre} />
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]} placeholder="Teléfono" placeholderTextColor={colors.textMuted} value={ccRefFam2Telefono} onChangeText={setCcRefFam2Telefono} keyboardType="phone-pad" />
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]} placeholder="Parentesco" placeholderTextColor={colors.textMuted} value={ccRefFam2Parentesco} onChangeText={setCcRefFam2Parentesco} />
+
+                  <Text style={{ fontSize:12, fontWeight:'700', color: colors.accent, marginTop:10, marginBottom:6 }}>🧑‍🤝‍🧑 Referencia persona conocida 1</Text>
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]} placeholder="Nombre" placeholderTextColor={colors.textMuted} value={ccRefCon1Nombre} onChangeText={setCcRefCon1Nombre} />
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]} placeholder="Teléfono" placeholderTextColor={colors.textMuted} value={ccRefCon1Telefono} onChangeText={setCcRefCon1Telefono} keyboardType="phone-pad" />
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]} placeholder="Lugar de trabajo" placeholderTextColor={colors.textMuted} value={ccRefCon1Trabajo} onChangeText={setCcRefCon1Trabajo} />
+
+                  <Text style={{ fontSize:12, fontWeight:'700', color: colors.accent, marginTop:10, marginBottom:6 }}>🧑‍🤝‍🧑 Referencia persona conocida 2</Text>
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]} placeholder="Nombre" placeholderTextColor={colors.textMuted} value={ccRefCon2Nombre} onChangeText={setCcRefCon2Nombre} />
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]} placeholder="Teléfono" placeholderTextColor={colors.textMuted} value={ccRefCon2Telefono} onChangeText={setCcRefCon2Telefono} keyboardType="phone-pad" />
+                  <TextInput style={[s.ccInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface, marginBottom:0 }]} placeholder="Lugar de trabajo" placeholderTextColor={colors.textMuted} value={ccRefCon2Trabajo} onChangeText={setCcRefCon2Trabajo} />
+                </View>
+              )}
             </View>
 
             {/* Botón guardar */}

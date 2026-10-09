@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -60,6 +61,7 @@ export default function LoginScreen() {
     login(email, password);
   };
 
+  const insets = useSafeAreaInsets();
   const s = styles(colors, isDark);
 
   return (
@@ -76,9 +78,9 @@ export default function LoginScreen() {
         bounces={false}
       >
         {/* ── Cabecera oscura (siempre oscura) ── */}
-        <View style={s.header}>
+        <View style={[s.header, { paddingTop: insets.top + 16 }]}>
           {/* Toggle de tema */}
-          <TouchableOpacity style={s.themeToggle} onPress={toggleTheme} activeOpacity={0.7}>
+          <TouchableOpacity style={[s.themeToggle, { top: insets.top + 12 }]} onPress={toggleTheme} activeOpacity={0.7}>
             <Text style={s.themeToggleIcon}>{isDark ? '☀️' : '🌙'}</Text>
           </TouchableOpacity>
 
@@ -212,7 +214,7 @@ const styles = (c, isDark) => StyleSheet.create({
   /* ── Cabecera ── */
   header: {
     backgroundColor: '#0d0d0d',
-    paddingTop: StatusBar.currentHeight ? StatusBar.currentHeight + 16 : 48,
+    paddingTop: 48, // paddingTop real (insets.top) se aplica inline en el render
     paddingBottom: 32,
     paddingHorizontal: 24,
     minHeight: SCREEN_HEIGHT * 0.44,
@@ -220,7 +222,7 @@ const styles = (c, isDark) => StyleSheet.create({
   },
   themeToggle: {
     position: 'absolute',
-    top: StatusBar.currentHeight ? StatusBar.currentHeight + 12 : 44,
+    top: 44, // top real (insets.top) se aplica inline en el render
     right: 20,
     width: 38,
     height: 38,

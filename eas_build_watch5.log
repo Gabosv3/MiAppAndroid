@@ -1,0 +1,5 @@
+git found, but git --help exited with status 3221225794.
+Repair your Git installation, or set EAS_NO_VCS=1 to use EAS CLI without Git (or any other version control system).
+Learn more: https://expo.fyi/eas-vcs-workflow
+EEXIT: 1
+    Error: build command failed.

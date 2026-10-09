@@ -13,26 +13,48 @@
  * Datos enviados a POST /api/pos/heartbeat:
  *   device_serial, device_nombre, lat, lng, bateria, app_version, error
  */
-import { Platform, AppState } from 'react-native';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import * as Battery from 'expo-battery';
+import * as Application from 'expo-application';
 import api from './api';
 
 const TASK_NAME   = 'SIDB_LOCATION_TASK';
 const INTERVAL_MS = 2 * 60 * 1000; // 2 min foreground
 const SERIAL_KEY  = '@sidb/device_serial';
-const APP_VERSION = '1.0.2';
+// Antes estaba fijo en '1.0.2' — el panel de monitoreo POS (columna
+// "app_version", usada para saber qué dispositivos siguen en una versión
+// vieja del APK) mostraba ese valor sin importar la versión real instalada.
+// Se lee del mismo lugar que ya usa updateChecker.js.
+const APP_VERSION = Constants.expoConfig?.version || '1.0.0';
 
 // ── Serial de dispositivo ─────────────────────────────────────────────────────
+// Antes se generaba un ID al azar y se guardaba solo en AsyncStorage — al
+// desinstalar y reinstalar la app (algo que pasa seguido: la app se pone
+// lenta, o toca desinstalar por un cambio de firma del APK) ese dato se
+// borraba y el mismo teléfono se registraba como un POS "nuevo" en el panel,
+// dejando decenas de fantasmas duplicados. Android.getAndroidId() sobrevive
+// a desinstalar/reinstalar la app (solo cambia si se resetea el teléfono de
+// fábrica), así que ahora es la base del serial — el mismo POS siempre vuelve
+// a identificarse igual sin importar cuántas veces se reinstale.
 const getOrCreateSerial = async () => {
   try {
     const cached = await AsyncStorage.getItem(SERIAL_KEY);
     if (cached) return cached;
-    const uuid = `RN-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2,7).toUpperCase()}`;
-    await AsyncStorage.setItem(SERIAL_KEY, uuid);
-    return uuid;
+
+    let base = Platform.OS === 'android' ? Application.getAndroidId() : null;
+    if (!base) {
+      // iOS o algún dispositivo sin Android ID disponible: se mantiene el
+      // comportamiento anterior como respaldo (mejor un serial random que
+      // ninguno, aunque no sobreviva a una reinstalación).
+      base = `RN-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2,7).toUpperCase()}`;
+    }
+    const serial = `AID-${base}`;
+    await AsyncStorage.setItem(SERIAL_KEY, serial);
+    return serial;
   } catch {
     return `RN-FALLBACK-${Platform.OS.toUpperCase()}`;
   }

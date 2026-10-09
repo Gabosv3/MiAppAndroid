@@ -1,14 +1,29 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, StatusBar, Alert } from 'react-native';
-import { verifyPin, setPin, removePin, hasPin } from '../services/appLock';
+import React, { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, StatusBar, Alert, Switch } from 'react-native';
+import { verifyPin, setPin, isLockEnabled, setLockEnabled } from '../services/appLock';
 import PinPad from '../components/PinPad';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // 'actual' -> 'nuevo1' -> 'nuevo2' -> listo
 export default function CambiarPinScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const [paso, setPaso] = useState('actual');
   const [input, setInput] = useState('');
   const [nuevoTemp, setNuevoTemp] = useState('');
   const [error, setError] = useState(false);
+  const [bloqueoActivo, setBloqueoActivo] = useState(true);
+  const [cargandoToggle, setCargandoToggle] = useState(false);
+
+  useEffect(() => {
+    isLockEnabled().then(setBloqueoActivo);
+  }, []);
+
+  const alCambiarToggle = async (valor) => {
+    setCargandoToggle(true);
+    setBloqueoActivo(valor);
+    await setLockEnabled(valor);
+    setCargandoToggle(false);
+  };
 
   const onCambiar = async (valor) => {
     setInput(valor);
@@ -46,23 +61,6 @@ export default function CambiarPinScreen({ navigation }) {
     }
   };
 
-  const confirmarQuitarPin = () => {
-    Alert.alert(
-      '¿Quitar el PIN?',
-      'Cualquiera que tenga el teléfono en mano podrá abrir la app sin pedir nada. ¿Seguro?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Quitar PIN', style: 'destructive', onPress: async () => {
-            const existe = await hasPin();
-            if (existe) await removePin();
-            navigation.goBack();
-          },
-        },
-      ]
-    );
-  };
-
   const titulo = paso === 'actual' ? 'Ingresa tu PIN actual'
     : paso === 'nuevo1' ? 'Crea tu nuevo PIN'
     : 'Confirma tu nuevo PIN';
@@ -70,11 +68,28 @@ export default function CambiarPinScreen({ navigation }) {
   return (
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Text style={s.backArrow}>←</Text>
         </TouchableOpacity>
-        <Text style={s.headerTitle}>Cambiar PIN</Text>
+        <Text style={s.headerTitle}>Seguridad</Text>
+      </View>
+
+      <View style={s.toggleRow}>
+        <View style={{ flex: 1, marginRight: 12 }}>
+          <Text style={s.toggleTitulo}>Bloquear la app con PIN</Text>
+          <Text style={s.toggleSub}>
+            {bloqueoActivo
+              ? 'Pide el PIN al abrir la app o volver de segundo plano.'
+              : 'La app queda libre — cualquiera que la abra entra directo.'}
+          </Text>
+        </View>
+        <Switch
+          value={bloqueoActivo}
+          onValueChange={alCambiarToggle}
+          disabled={cargandoToggle}
+          trackColor={{ true: '#1565C0' }}
+        />
       </View>
 
       <View style={s.center}>
@@ -83,12 +98,6 @@ export default function CambiarPinScreen({ navigation }) {
           <PinPad valor={input} onCambiar={onCambiar} error={error} />
         </View>
         {error && <Text style={s.errorTxt}>{paso === 'actual' ? 'PIN incorrecto' : 'No coincide, intenta de nuevo'}</Text>}
-
-        {paso === 'actual' && (
-          <TouchableOpacity onPress={confirmarQuitarPin} style={{ marginTop: 32 }}>
-            <Text style={s.quitarTxt}>Quitar PIN de este dispositivo</Text>
-          </TouchableOpacity>
-        )}
       </View>
     </View>
   );
@@ -98,7 +107,8 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#f5f6fa' },
   header: {
     backgroundColor: '#1565C0', flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingTop: (StatusBar.currentHeight || 0) + 8, paddingBottom: 16, paddingHorizontal: 16,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom: 16, paddingHorizontal: 16,
   },
   backBtn: {},
   backArrow: { color: '#fff', fontSize: 24 },
@@ -107,5 +117,11 @@ const s = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
   titulo: { fontSize: 16, fontWeight: '800', color: '#1a1a1a', textAlign: 'center' },
   errorTxt: { color: '#e53e3e', fontSize: 13, fontWeight: '600', marginTop: 16 },
-  quitarTxt: { color: '#e53e3e', fontSize: 13, fontWeight: '600' },
+  toggleRow: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#fff', marginHorizontal: 16, marginTop: 16,
+    borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#e5e7eb',
+  },
+  toggleTitulo: { fontSize: 14, fontWeight: '700', color: '#1a1a1a' },
+  toggleSub: { fontSize: 12, color: '#888', marginTop: 3, lineHeight: 16 },
 });

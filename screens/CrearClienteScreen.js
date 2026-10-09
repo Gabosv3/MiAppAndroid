@@ -35,6 +35,26 @@ export default function CrearClienteScreen({ navigation }) {
   const [emailError, setEmailError] = useState('');
   const [emailRequerido, setEmailRequerido] = useState(false);
 
+  // Campos opcionales adicionales
+  const [mostrarOpcionales, setMostrarOpcionales] = useState(false);
+  const [direccion, setDireccion] = useState('');
+  const [departamento, setDepartamento] = useState('');
+  const [municipio, setMunicipio] = useState('');
+  const [distrito, setDistrito] = useState('');
+  const [nombreConyuge, setNombreConyuge] = useState('');
+  const [refFam1Nombre, setRefFam1Nombre] = useState('');
+  const [refFam1Telefono, setRefFam1Telefono] = useState('');
+  const [refFam1Parentesco, setRefFam1Parentesco] = useState('');
+  const [refFam2Nombre, setRefFam2Nombre] = useState('');
+  const [refFam2Telefono, setRefFam2Telefono] = useState('');
+  const [refFam2Parentesco, setRefFam2Parentesco] = useState('');
+  const [refCon1Nombre, setRefCon1Nombre] = useState('');
+  const [refCon1Telefono, setRefCon1Telefono] = useState('');
+  const [refCon1Trabajo, setRefCon1Trabajo] = useState('');
+  const [refCon2Nombre, setRefCon2Nombre] = useState('');
+  const [refCon2Telefono, setRefCon2Telefono] = useState('');
+  const [refCon2Trabajo, setRefCon2Trabajo] = useState('');
+
   useEffect(() => {
     AsyncStorage.getItem('POS_CONFIG').then(raw => {
       if (raw) { try { setEmailRequerido(!!JSON.parse(raw).emailRequerido); } catch {} }
@@ -153,7 +173,7 @@ export default function CrearClienteScreen({ navigation }) {
         finally { setScanningOcr(false); }
       }
     } catch (e) {
-      Alert.alert('Error', 'No se pudo abrir la cámara.');
+      Alert.alert('Error', 'No se pudo abrir la cámara: ' + (e?.message || String(e)));
     }
   };
 
@@ -168,7 +188,7 @@ export default function CrearClienteScreen({ navigation }) {
         if (side === 'frente') { setDuiFrente(imageFile); setFrenteError(''); }
         else                   { setDuiReverso(imageFile); setReversoError(''); }
       }
-    } catch (e) { Alert.alert('Error', 'No se pudo tomar la foto.'); }
+    } catch (e) { Alert.alert('Error', 'No se pudo tomar la foto: ' + (e?.message || String(e))); }
   };
 
   // ==================== FOTO DE CASA ====================
@@ -188,7 +208,7 @@ export default function CrearClienteScreen({ navigation }) {
         });
       }
     } catch (e) {
-      Alert.alert('Error', 'No se pudo tomar la foto.');
+      Alert.alert('Error', 'No se pudo tomar la foto: ' + (e?.message || String(e)));
     }
   };
 
@@ -214,6 +234,31 @@ export default function CrearClienteScreen({ navigation }) {
     }
   };
 
+  // Recolecta solo los campos opcionales que el usuario sí llenó, para no
+  // enviar strings vacíos que pisen valores nulos esperados por el backend.
+  const camposOpcionales = () => {
+    const campos = {
+      direccion: direccion.trim(),
+      departamento: departamento.trim(),
+      municipio: municipio.trim(),
+      distrito: distrito.trim(),
+      nombre_conyuge: nombreConyuge.trim(),
+      ref_fam1_nombre: refFam1Nombre.trim(),
+      ref_fam1_telefono: refFam1Telefono.trim(),
+      ref_fam1_parentesco: refFam1Parentesco.trim(),
+      ref_fam2_nombre: refFam2Nombre.trim(),
+      ref_fam2_telefono: refFam2Telefono.trim(),
+      ref_fam2_parentesco: refFam2Parentesco.trim(),
+      ref_con1_nombre: refCon1Nombre.trim(),
+      ref_con1_telefono: refCon1Telefono.trim(),
+      ref_con1_trabajo: refCon1Trabajo.trim(),
+      ref_con2_nombre: refCon2Nombre.trim(),
+      ref_con2_telefono: refCon2Telefono.trim(),
+      ref_con2_trabajo: refCon2Trabajo.trim(),
+    };
+    return Object.fromEntries(Object.entries(campos).filter(([, v]) => v));
+  };
+
   // ==================== ENVIAR FORMULARIO ====================
   const handleSubmit = async () => {
     // Validar campos
@@ -234,6 +279,10 @@ export default function CrearClienteScreen({ navigation }) {
       formData.append('latitud', latitud.trim());
       formData.append('longitud', longitud.trim());
       if (email.trim()) formData.append('email', email.trim());
+
+      Object.entries(camposOpcionales()).forEach(([key, value]) => {
+        if (value) formData.append(key, value);
+      });
 
       if (duiFrente)  appendImageToFormData(formData, 'dui_foto_frente', duiFrente);
       if (duiReverso) appendImageToFormData(formData, 'dui_foto_reverso', duiReverso);
@@ -278,6 +327,7 @@ export default function CrearClienteScreen({ navigation }) {
             telefono_whatsapp: telefonoWhatsapp.trim(),
             latitud: latitud.trim(),
             longitud: longitud.trim(),
+            ...camposOpcionales(),
             ...(duiFrente  && { dui_foto_frente:  duiFrente }),
             ...(duiReverso && { dui_foto_reverso: duiReverso }),
             ...(fotoCasa   && { foto_casa:         fotoCasa }),
@@ -329,8 +379,8 @@ export default function CrearClienteScreen({ navigation }) {
       setLongError('Requerido');
       valid = false;
     }
-    if (!duiFrente)  { setFrenteError('Toma la foto del frente del DUI');   valid = false; }
-    if (!duiReverso) { setReversoError('Toma la foto del reverso del DUI'); valid = false; }
+    // Las fotos del DUI son opcionales — a veces la cámara falla y no debe
+    // impedir crear el cliente por eso. Se puede completar después.
     if (emailRequerido && !email.trim()) {
       setEmailError('El email es requerido');
       valid = false;
@@ -352,8 +402,6 @@ export default function CrearClienteScreen({ navigation }) {
       phoneRegex.test(telefonoWhatsapp) &&
       latitud.trim() &&
       longitud.trim() &&
-      duiFrente &&
-      duiReverso &&
       !loading
     );
   };
@@ -544,7 +592,7 @@ export default function CrearClienteScreen({ navigation }) {
       <View style={s.card}>
         <View style={s.cardHeader}>
           <Text style={s.cardTitle}>🪪 Fotos del DUI</Text>
-          <Text style={s.cardRequired}>* Ambos lados</Text>
+          <Text style={s.cardRequired}>Opcional</Text>
         </View>
         <View style={s.photoGrid}>
           <TouchableOpacity style={[s.photoCard, duiFrente && s.photoCardDone]} onPress={() => tomarFotoDui('frente')}>
@@ -592,6 +640,78 @@ export default function CrearClienteScreen({ navigation }) {
           <TouchableOpacity onPress={() => { setPreviewImage(fotoCasa.uri); setPreviewVisible(true); }} style={s.previewItem}>
             <Image source={{ uri: fotoCasa.uri }} style={s.previewImage} />
           </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Dirección y referencias personales (opcional) */}
+      <View style={s.card}>
+        <TouchableOpacity
+          style={[s.cardHeader, { marginBottom: mostrarOpcionales ? 12 : 0 }]}
+          onPress={() => setMostrarOpcionales(v => !v)}
+        >
+          <Text style={s.cardTitle}>🏘️ Dirección y referencias</Text>
+          <Text style={s.cardRequired}>{mostrarOpcionales ? '▲ Ocultar' : '▼ Opcional'}</Text>
+        </TouchableOpacity>
+
+        {mostrarOpcionales && (
+          <>
+            <TextInput
+              style={s.input}
+              placeholder="Dirección (calle, colonia, número de casa)"
+              placeholderTextColor={colors.textMuted}
+              value={direccion}
+              onChangeText={setDireccion}
+              multiline
+            />
+            <TextInput
+              style={s.input}
+              placeholder="Departamento"
+              placeholderTextColor={colors.textMuted}
+              value={departamento}
+              onChangeText={setDepartamento}
+            />
+            <TextInput
+              style={s.input}
+              placeholder="Municipio"
+              placeholderTextColor={colors.textMuted}
+              value={municipio}
+              onChangeText={setMunicipio}
+            />
+            <TextInput
+              style={s.input}
+              placeholder="Distrito"
+              placeholderTextColor={colors.textMuted}
+              value={distrito}
+              onChangeText={setDistrito}
+            />
+            <TextInput
+              style={s.input}
+              placeholder="Nombre del cónyuge"
+              placeholderTextColor={colors.textMuted}
+              value={nombreConyuge}
+              onChangeText={setNombreConyuge}
+            />
+
+            <Text style={s.subCardTitle}>👨‍👩‍👧 Referencia familiar 1</Text>
+            <TextInput style={s.input} placeholder="Nombre" placeholderTextColor={colors.textMuted} value={refFam1Nombre} onChangeText={setRefFam1Nombre} />
+            <TextInput style={s.input} placeholder="Teléfono" placeholderTextColor={colors.textMuted} value={refFam1Telefono} onChangeText={setRefFam1Telefono} keyboardType="phone-pad" />
+            <TextInput style={s.input} placeholder="Parentesco" placeholderTextColor={colors.textMuted} value={refFam1Parentesco} onChangeText={setRefFam1Parentesco} />
+
+            <Text style={s.subCardTitle}>👨‍👩‍👧 Referencia familiar 2</Text>
+            <TextInput style={s.input} placeholder="Nombre" placeholderTextColor={colors.textMuted} value={refFam2Nombre} onChangeText={setRefFam2Nombre} />
+            <TextInput style={s.input} placeholder="Teléfono" placeholderTextColor={colors.textMuted} value={refFam2Telefono} onChangeText={setRefFam2Telefono} keyboardType="phone-pad" />
+            <TextInput style={s.input} placeholder="Parentesco" placeholderTextColor={colors.textMuted} value={refFam2Parentesco} onChangeText={setRefFam2Parentesco} />
+
+            <Text style={s.subCardTitle}>🧑‍🤝‍🧑 Referencia persona conocida 1</Text>
+            <TextInput style={s.input} placeholder="Nombre" placeholderTextColor={colors.textMuted} value={refCon1Nombre} onChangeText={setRefCon1Nombre} />
+            <TextInput style={s.input} placeholder="Teléfono" placeholderTextColor={colors.textMuted} value={refCon1Telefono} onChangeText={setRefCon1Telefono} keyboardType="phone-pad" />
+            <TextInput style={s.input} placeholder="Lugar de trabajo" placeholderTextColor={colors.textMuted} value={refCon1Trabajo} onChangeText={setRefCon1Trabajo} />
+
+            <Text style={s.subCardTitle}>🧑‍🤝‍🧑 Referencia persona conocida 2</Text>
+            <TextInput style={s.input} placeholder="Nombre" placeholderTextColor={colors.textMuted} value={refCon2Nombre} onChangeText={setRefCon2Nombre} />
+            <TextInput style={s.input} placeholder="Teléfono" placeholderTextColor={colors.textMuted} value={refCon2Telefono} onChangeText={setRefCon2Telefono} keyboardType="phone-pad" />
+            <TextInput style={[s.input, { marginBottom: 0 }]} placeholder="Lugar de trabajo" placeholderTextColor={colors.textMuted} value={refCon2Trabajo} onChangeText={setRefCon2Trabajo} />
+          </>
         )}
       </View>
 
@@ -705,6 +825,13 @@ const styles = (colors) => StyleSheet.create({
     fontSize: 10,
     color: colors.textMuted,
     fontStyle: 'italic',
+  },
+  subCardTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.accent,
+    marginTop: 10,
+    marginBottom: 6,
   },
 
   // ── INPUTS ──────────────────────────────────────────────────────────────

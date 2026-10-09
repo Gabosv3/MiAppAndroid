@@ -3,8 +3,9 @@ import {
   View, Text, TouchableOpacity, StyleSheet, StatusBar,
   ActivityIndicator, TextInput, FlatList, Platform,
 } from 'react-native';
-import api from '../services/api';
+import api, { TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
@@ -13,6 +14,7 @@ const avatarColor = (name = '') => AVATAR_COLORS[(name.charCodeAt(0) || 0) % AVA
 const initials    = (name = '') => name.trim().split(/\s+/).slice(0,2).map(w=>w[0]?.toUpperCase()||'').join('');
 
 export default function DirectorioClientesScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const { isOnline } = useConnectivity();
   const [query,    setQuery]    = useState('');
   const [loading,  setLoading]  = useState(true);
@@ -34,6 +36,7 @@ export default function DirectorioClientesScreen({ navigation }) {
     try {
       const { data } = await api.get('/cobros/clientes', {
         params: buscar.trim() ? { buscar: buscar.trim() } : {},
+        timeout: TIMEOUT_LECTURA_CACHE,
       });
       setRutas(data.rutas || []);
       setTotales({ total_rutas: data.total_rutas || 0, total_clientes: data.total_clientes || 0 });
@@ -113,7 +116,7 @@ export default function DirectorioClientesScreen({ navigation }) {
     <View style={s.root}>
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />
 
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} hitSlop={{top:10,bottom:10,left:10,right:10}}>
           <Text style={s.backTxt}>←</Text>
         </TouchableOpacity>
@@ -201,7 +204,7 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#f5f6f8' },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingTop: StatusBar.currentHeight ? StatusBar.currentHeight + 10 : 50,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
     paddingBottom: 14, paddingHorizontal: 16, backgroundColor: '#fff',
     borderBottomWidth: 1, borderBottomColor: '#eee',
   },

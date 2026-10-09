@@ -21,6 +21,34 @@ const api = axios.create({
   },
 });
 
+// Timeout corto para pantallas que tienen caché local de respaldo (ruta de
+// hoy, asignación de productos, categorías, historial, etc.). Con el timeout
+// default de 20s, una conexión lenta (pero no totalmente caída) dejaba a
+// esas pantallas "colgadas" hasta 20 segundos antes de mostrar los datos
+// guardados — el modo offline tardaba en "activarse" aunque ya estuviera
+// disponible. Las escrituras críticas (ventas, pagos) NO deben usar este
+// timeout corto: necesitan más margen para completarse en conexión lenta,
+// y quedan protegidas contra duplicados por idempotency_key si sí se
+// quedan cortas.
+export const TIMEOUT_LECTURA_CACHE = 8000;
+
+// Notificado por el interceptor de abajo cada vez que un request falla de
+// forma transitoria (sin respuesta, o 5xx) — permite que ConnectivityProvider
+// reaccione al instante en vez de esperar el próximo ping periódico (hasta
+// 15s de retraso). Se registra desde services/connectivity.js.
+let _onTransitorio = null;
+export const setTransitorioListener = (fn) => { _onTransitorio = fn; };
+
+// Avisa cuando el servidor rechaza el token (401) fuera del propio /login —
+// antes esto nunca pasaba a media sesión porque los tokens no vencían, pero
+// ahora sí expiran (60 días) y un teléfono con la app abierta muchos días
+// seguidos puede toparse con esto sin haber cerrado sesión. Sin este aviso,
+// cada pantalla mostraría un error de "no autorizado" distinto en vez de
+// mandar al cobrador a iniciar sesión de nuevo. Se registra desde
+// AuthContext.
+let _onSesionExpirada = null;
+export const setSesionExpiradaListener = (fn) => { _onSesionExpirada = fn; };
+
 // Token a nivel de módulo para compartir con AuthContext sin pasar props
 let _token = null;
 
@@ -33,15 +61,25 @@ api.interceptors.request.use((config) => {
 });
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Un request que sí completó demuestra que hay conexión — recupera el
+    // estado "en línea" al instante en vez de esperar el próximo ping.
+    _onTransitorio?.(false);
+    return response;
+  },
   (error) => {
     if (error.response) {
       // Error del servidor (4xx, 5xx) — preservar .response para que offlineQueue distinga
+      if (error.response.status >= 500) _onTransitorio?.(true);
+      if (error.response.status === 401 && !error.config?.url?.includes('/login')) {
+        _onSesionExpirada?.();
+      }
       const msg = error.response.data?.message || `Error ${error.response.status}`;
       const serverError = new Error(msg);
       serverError.response = error.response; // IMPORTANTE: preservar response
       return Promise.reject(serverError);
     }
+    _onTransitorio?.(true);
     if (error.code === 'ECONNABORTED') {
       return Promise.reject(new Error('Tiempo de espera agotado'));
     }

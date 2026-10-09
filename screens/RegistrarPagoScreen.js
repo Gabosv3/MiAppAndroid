@@ -9,6 +9,7 @@ import api, { esErrorTransitorio } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import { encolarPago, guardarEnHistorial, marcarClienteVisitado, generarNumeroRecibo } from '../services/cobrosOffline';
 import { useAuth } from '../context/AuthContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const fmt = (n) => `$${Number(n||0).toFixed(2)}`;
 const initials = (name='') => name.trim().split(/\s+/).slice(0,2).map(w=>w[0]?.toUpperCase()||'').join('');
@@ -84,6 +85,7 @@ const METODOS = [
 ];
 
 export default function RegistrarPagoScreen({ navigation, route }) {
+  const insets = useSafeAreaInsets();
   const { cliente, ventaId, ventaNumero, producto, codigoCliente, saldoPendiente, cuotasVencidas } = route.params;
   const { user } = useAuth();
   const nombreCobrador = user?.name || user?.full_name || user?.nombre || user?.usuario || 'Cobrador';
@@ -141,6 +143,7 @@ export default function RegistrarPagoScreen({ navigation, route }) {
           clienteId: cliente.id, clienteNombre: cliente.nombre, clienteCodigo: codigoCliente,
           clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
           ventaNumero, numeroRecibo, producto, monto: montoNum, metodo,
+          saldoAntes, saldoDespues,
           proximaVisitaFecha: proxVisita,
           pagoOfflineId: pagoEncolado.id,
           resultado: {
@@ -192,15 +195,16 @@ export default function RegistrarPagoScreen({ navigation, route }) {
       const productoFinal = data.producto || producto;
       const codigoFinal = data.cliente?.codigo_anterior || codigoCliente;
       const proxVisita = calcProximaVisita();
+      const saldoAntes   = saldoNum;
+      const saldoDespues = Math.max(0, saldoAntes - montoNum);
       const histItem = await guardarEnHistorial({
         clienteId: cliente.id, clienteNombre: cliente.nombre, clienteCodigo: codigoFinal,
         clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
         ventaNumero, numeroRecibo, producto: productoFinal, monto: montoNum, metodo, resultado: data,
+        saldoAntes, saldoDespues,
         proximaVisitaFecha: proxVisita,
       });
       await marcarClienteVisitado(cliente.id);
-      const saldoAntes   = saldoNum;
-      const saldoDespues = Math.max(0, saldoAntes - montoNum);
 
       navigation.replace('PagoRegistrado', {
         autoImprimir: true,
@@ -287,7 +291,7 @@ export default function RegistrarPagoScreen({ navigation, route }) {
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0"/>
 
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={()=>navigation.goBack()} style={s.backBtn} hitSlop={{top:10,bottom:10,left:10,right:10}}>
           <Text style={s.backArrow}>←</Text>
         </TouchableOpacity>
@@ -498,7 +502,8 @@ const s = StyleSheet.create({
   offlineTxt:   { color:'#856404', fontSize:12, fontWeight:'600', textAlign:'center' },
   header: {
     backgroundColor:'#1565C0', flexDirection:'row', alignItems:'center',
-    paddingTop:(StatusBar.currentHeight||0)+8, paddingBottom:16, paddingHorizontal:16,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom:16, paddingHorizontal:16,
   },
   backBtn:   { marginRight:12 },
   backArrow: { color:'#fff', fontSize:24 },

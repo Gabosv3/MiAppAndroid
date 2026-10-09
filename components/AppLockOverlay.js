@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, AppState, StatusBar } from 'react-native';
-import { hasPin, setPin, verifyPin } from '../services/appLock';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { View, Text, StyleSheet, AppState, StatusBar, TouchableOpacity } from 'react-native';
+import * as LocalAuthentication from 'expo-local-authentication';
+import { hasPin, setPin, verifyPin, isLockEnabled } from '../services/appLock';
 import PinPad from './PinPad';
 
 // Overlay a pantalla completa que se monta encima de toda la app cuando hay
@@ -13,9 +14,12 @@ export default function AppLockOverlay() {
   const [listo, setListo] = useState(false);
   const [modo, setModo] = useState('verificar'); // 'verificar' | 'crear1' | 'crear2'
   const [desbloqueado, setDesbloqueado] = useState(false);
+  const [habilitado, setHabilitado] = useState(true);
   const [pinTemp, setPinTemp] = useState('');
   const [input, setInput] = useState('');
   const [error, setError] = useState(false);
+  const [biometriaDisponible, setBiometriaDisponible] = useState(false);
+  const [autenticando, setAutenticando] = useState(false);
   const appState = useRef(AppState.currentState);
   // Abrir el diálogo de imprimir, la cámara, el selector de imagen o el share
   // sheet también manda la app a background por un instante — sin este
@@ -23,14 +27,54 @@ export default function AppLockOverlay() {
   // esos diálogos nativos, no solo al minimizar la app de verdad.
   const backgroundedAt = useRef(null);
   const GRACIA_MS = 120000;
+  // Para no relanzar el prompt de huella solo porque el componente
+  // re-renderiza — se resetea cada vez que la app se vuelve a bloquear
+  // de verdad (ver el listener de AppState más abajo).
+  const yaIntentoBiometriaAuto = useRef(false);
+
+  const intentarBiometria = useCallback(async () => {
+    setAutenticando(true);
+    try {
+      const res = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Desbloquea la app',
+        cancelLabel: 'Usar PIN',
+        disableDeviceFallback: true, // que use la huella/rostro propios de la app, no el PIN del sistema operativo
+      });
+      if (res.success) setDesbloqueado(true);
+    } catch {
+      // Sin soporte o cancelado — se queda en la pantalla de PIN, sin error visible.
+    } finally {
+      setAutenticando(false);
+    }
+  }, []);
 
   useEffect(() => {
     (async () => {
+      const activo = await isLockEnabled();
+      setHabilitado(activo);
+      if (!activo) { setListo(true); return; }
       const existe = await hasPin();
       setModo(existe ? 'verificar' : 'crear1');
+
+      const [hardware, enrolado] = await Promise.all([
+        LocalAuthentication.hasHardwareAsync(),
+        LocalAuthentication.isEnrolledAsync(),
+      ]);
+      setBiometriaDisponible(hardware && enrolado);
+
       setListo(true);
     })();
   }, []);
+
+  // Ofrece la huella automáticamente en cuanto se muestra el candado (una
+  // sola vez por bloqueo) — el cobrador no tiene que tocar nada si ya la
+  // tiene configurada, solo poner el dedo.
+  useEffect(() => {
+    if (listo && habilitado && modo === 'verificar' && biometriaDisponible && !yaIntentoBiometriaAuto.current) {
+      yaIntentoBiometriaAuto.current = true;
+      intentarBiometria();
+    }
+  }, [listo, habilitado, modo, biometriaDisponible, intentarBiometria]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', async (next) => {
@@ -49,11 +93,16 @@ export default function AppLockOverlay() {
         backgroundedAt.current = null;
         if (elapsed < GRACIA_MS) return; // fue un diálogo nativo, no un cambio de app real
 
+        const activo = await isLockEnabled();
+        setHabilitado(activo);
+        if (!activo) return;
+
         const existe = await hasPin();
         if (existe) {
           setDesbloqueado(false);
           setModo('verificar');
           setInput('');
+          yaIntentoBiometriaAuto.current = false;
         }
       }
     });
@@ -96,7 +145,7 @@ export default function AppLockOverlay() {
     }
   }, [input, modo, pinTemp]);
 
-  if (!listo || desbloqueado) return null;
+  if (!listo || desbloqueado || !habilitado) return null;
 
   const titulo = modo === 'crear1' ? 'Crea un PIN de seguridad'
     : modo === 'crear2' ? 'Confirma tu PIN'
@@ -117,6 +166,18 @@ export default function AppLockOverlay() {
         <PinPad valor={input} onCambiar={setInput} error={error} />
       </View>
       {error && <Text style={s.errorTxt}>{modo === 'crear2' ? 'No coincide, intenta de nuevo' : 'PIN incorrecto'}</Text>}
+
+      {modo === 'verificar' && biometriaDisponible && (
+        <TouchableOpacity
+          style={s.huellaBtn}
+          onPress={intentarBiometria}
+          disabled={autenticando}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Text style={s.huellaIcon}>👆</Text>
+          <Text style={s.huellaTxt}>{autenticando ? 'Verificando...' : 'Usar huella'}</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -131,4 +192,7 @@ const s = StyleSheet.create({
   titulo: { fontSize: 18, fontWeight: '800', color: '#1a1a1a', textAlign: 'center' },
   subtitulo: { fontSize: 13, color: '#888', textAlign: 'center', marginTop: 6, maxWidth: 260 },
   errorTxt: { color: '#e53e3e', fontSize: 13, fontWeight: '600', marginTop: 16 },
+  huellaBtn: { alignItems: 'center', marginTop: 28 },
+  huellaIcon: { fontSize: 30 },
+  huellaTxt: { color: '#1565C0', fontSize: 13, fontWeight: '700', marginTop: 4 },
 });

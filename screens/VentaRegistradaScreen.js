@@ -1,24 +1,31 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, StatusBar,
-  ScrollView, Linking, Alert, ActivityIndicator,
+  ScrollView, Alert, ActivityIndicator,
 } from 'react-native';
 import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Asset } from 'expo-asset';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { enviarReciboPorWhatsApp, compartirPdf, htmlPieInformativo, htmlMetodosPago } from '../services/reciboWhatsApp';
 
 const fmt     = (n) => `$${Number(n || 0).toFixed(2)}`;
 const escHtml = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
 // ── Genera HTML del ticket ────────────────────────────────────────────────────
-const buildHtml = (venta, carrito, totals, logoUri) => {
+// pdf=true: mismo comprobante, pero ampliado (zoom) para que se lea bien en el
+// teléfono del cliente y con la página web al pie. Imprimir no cambia.
+const buildHtml = (venta, carrito, totals, logoUri, pdf = false) => {
   const date    = new Date(venta.fecha_venta || Date.now()).toLocaleString('es-SV');
   const cliente = venta.cliente?.nombre
     ? `${venta.cliente.nombre} ${venta.cliente.apellido || ''}`.trim()
     : totals.clienteNombre || 'Consumidor Final';
-  const cajaNombre      = escHtml(String(venta.caja || venta.caja_numero || '01'));
-  const sucursalNombre  = escHtml(String(venta.sucursal?.nombre || venta.sucursal_nombre || ''));
-  const vendedorNombre  = escHtml(String(venta.vendedor?.nombre || venta.user?.name || ''));
+  const vendedorNombre  = escHtml(String(
+    (venta.vendedor ? `${venta.vendedor.nombre || ''} ${venta.vendedor.apellido || ''}`.trim() : '')
+    || venta.user?.name
+    || venta.vendedorNombre
+    || ''
+  ));
   const ventaNumero     = escHtml(String(venta.numero_venta || venta.id || 'N/A'));
   const tipoPagoLabel   = totals.tipoPago === 'credito' ? 'Crédito' : 'Contado';
   const logoHtml        = logoUri
@@ -46,7 +53,7 @@ const buildHtml = (venta, carrito, totals, logoUri) => {
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <style>
       *{box-sizing:border-box}
-      body{font-family:Arial,sans-serif;font-size:14px;width:100%;max-width:380px;margin:0 auto;padding:12px}
+      body{font-family:Arial,sans-serif;font-size:14px;width:100%;max-width:380px;margin:0 auto;padding:12px${pdf ? ';zoom:1.3' : ''}}
       .center{text-align:center}
       .divider{border-top:2px dashed #333;margin:10px 0}
       table{width:100%;border-collapse:collapse;table-layout:fixed}
@@ -61,16 +68,14 @@ const buildHtml = (venta, carrito, totals, logoUri) => {
       <div style="font-size:12px;color:#555">Muebles • Electrodomésticos</div>
     </div>
     <div style="font-size:12px;margin-top:8px;line-height:18px;color:#555">
-      Teléfono: +503 7777-7777<br/>WhatsApp: +503 7777-7777<br/>
-      Correo: ventas@bmdistribuidora.com<br/>Web: www.bmdistribuidora.com
+      Teléfono: 6047-9762<br/>WhatsApp: 6047-9762<br/>
+      Correo: ventas@distribuidorabriancescomenjivar.com<br/>Web: www.distribuidorabriancescomenjivar.com
     </div>
-    <div style="font-size:12px;margin-top:6px;color:#555">Dirección:<br/>Usulután, El Salvador</div>
+    <div style="font-size:12px;margin-top:6px;color:#555">Dirección:<br/>Col. Jardines de la Constancia, Polig. V3, Santa María, Usulután</div>
     <div class="divider"></div>
     <div style="font-size:13px;font-weight:700;text-align:center;margin-bottom:8px">━ TICKET DE VENTA ━</div>
     <div style="font-size:12px;margin-bottom:2px"><strong>Venta No:</strong> ${ventaNumero}</div>
     <div style="font-size:12px;margin-bottom:2px"><strong>Fecha:</strong> ${escHtml(date)}</div>
-    <div style="font-size:12px;margin-bottom:2px"><strong>Caja:</strong> ${cajaNombre}</div>
-    <div style="font-size:12px;margin-bottom:2px"><strong>Sucursal:</strong> ${sucursalNombre}</div>
     <div style="font-size:12px;margin-bottom:2px"><strong>Vendedor:</strong> ${vendedorNombre}</div>
     <div style="font-size:12px;margin-top:4px"><strong>Cliente:</strong> ${escHtml(cliente)}</div>
     <div class="divider"></div>
@@ -86,10 +91,12 @@ const buildHtml = (venta, carrito, totals, logoUri) => {
     <div style="font-size:13px;margin-bottom:4px"><strong>Forma de pago:</strong> ${tipoPagoLabel}</div>
     <table>
       ${totals.tipoPago === 'credito'
-        ? `<tr><td style="font-weight:700">Prima inicial</td><td style="text-align:right;font-weight:800;font-size:14px">${totals.pagoVal > 0 ? fmt(totals.pagoVal) : 'Sin prima'}</td></tr>`
+        ? `<tr><td style="font-weight:700">Prima inicial</td><td style="text-align:right;font-weight:800;font-size:14px">${totals.pagoVal > 0 ? fmt(totals.pagoVal) : 'Sin prima'}</td></tr>
+           <tr><td style="font-weight:700">Saldo pendiente</td><td style="text-align:right;font-weight:800;font-size:14px">${fmt(Math.max(0, totals.total - (totals.pagoVal || 0)))}</td></tr>`
         : `<tr><td>Pago recibido</td><td style="text-align:right;font-weight:600">${fmt(totals.pagoVal)}</td></tr>
            <tr><td>Vuelto</td><td style="text-align:right;font-weight:600">${fmt(totals.vuelto)}</td></tr>`}
     </table>
+    ${pdf ? '' : `<div style="margin-top:8px">${htmlMetodosPago(11)}</div>`}
     <div class="divider"></div>
     <div style="font-size:12px;font-weight:700;margin-bottom:4px">GARANTÍA Y CONSULTAS</div>
     <div style="font-size:11px;line-height:17px;color:#555">
@@ -98,44 +105,13 @@ const buildHtml = (venta, carrito, totals, logoUri) => {
     <div class="divider"></div>
     <div style="text-align:center;font-size:13px;font-weight:700">¡Gracias por su compra!</div>
     <div style="text-align:center;font-size:11px;color:#555">DISTRIBUIDORA BM<br/>"Equipando su hogar con calidad"</div>
+    ${pdf ? htmlPieInformativo(12) : ''}
   </body></html>`;
-};
-
-// ── Mensaje WhatsApp ──────────────────────────────────────────────────────────
-const buildWaMsg = (venta, carrito, totals) => {
-  const date    = new Date(venta.fecha_venta || Date.now()).toLocaleDateString('es-SV');
-  const cliente = venta.cliente?.nombre
-    ? `${venta.cliente.nombre} ${venta.cliente.apellido || ''}`.trim()
-    : totals.clienteNombre || 'Consumidor Final';
-  const items = (carrito || []).map(d => {
-    const cuotas = Number(d.cuotas || 0);
-    return cuotas > 0
-      ? `• ${d.nombre} — ${cuotas} cuotas de ${fmt(d.precio_cuota)}`
-      : `• ${d.nombre} x${d.cantidad} — ${fmt(d.precio_venta)}`;
-  }).join('\n');
-  const tipoPagoLabel = totals.tipoPago === 'credito' ? 'Crédito' : 'Contado';
-
-  return `🏪 *DISTRIBUIDORA BM*
-🛍️ *TICKET DE VENTA*
-━━━━━━━━━━━━━━━━━━━━
-📅 Fecha: ${date}
-🔖 Venta No: ${venta.numero_venta || venta.id}
-👤 Cliente: ${cliente}
-💳 Forma de pago: ${tipoPagoLabel}
-
-📦 *Productos:*
-${items}
-
-💵 Subtotal: ${fmt(totals.subtotal)}
-🏷️ Descuento: ${fmt(totals.descVal)}
-💰 *TOTAL: ${fmt(totals.total)}*${totals.tipoPago === 'credito' ? `\n🤝 Prima inicial: ${totals.pagoVal > 0 ? fmt(totals.pagoVal) : 'Sin prima'}` : `\n💵 Vuelto: ${fmt(totals.vuelto)}`}
-━━━━━━━━━━━━━━━━━━━━
-¡Gracias por su compra! 🙏
-_Conserve este mensaje como comprobante._`;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function VentaRegistradaScreen({ navigation, route }) {
+  const insets = useSafeAreaInsets();
   const { venta, carrito, totals, clienteWhatsapp } = route.params;
   const [printing, setPrinting] = useState(false);
   const [logoUri,  setLogoUri]  = useState(null);
@@ -167,19 +143,29 @@ export default function VentaRegistradaScreen({ navigation, route }) {
     }
   }, [venta, carrito, totals, logoUri]);
 
-  const enviarWhatsApp = useCallback(async () => {
-    const telefono = (clienteWhatsapp || '').replace(/\D/g, '');
-    if (!telefono) {
-      Alert.alert('Sin teléfono', 'El cliente no tiene número de WhatsApp registrado.');
-      return;
-    }
-    const numero = telefono.startsWith('503') ? telefono : `503${telefono}`;
-    const msg    = buildWaMsg(venta, carrito, totals);
-    const url    = `https://wa.me/${numero}?text=${encodeURIComponent(msg)}`;
-    const puede  = await Linking.canOpenURL(url);
-    if (puede) await Linking.openURL(url);
-    else Alert.alert('WhatsApp no disponible', 'No se encontró WhatsApp en este dispositivo.');
-  }, [venta, carrito, totals, clienteWhatsapp]);
+  const numeroComprobante = venta.numero_venta || venta.id || 'venta';
+  const generarHtmlPdf = () => buildHtml(venta, carrito, totals, logoUri, true);
+  const nombreArchivo = `Comprobante-${numeroComprobante}`;
+
+  // Texto con la página web + comprobante en PDF (ver services/reciboWhatsApp.js).
+  const enviarWhatsApp = useCallback(() => enviarReciboPorWhatsApp({
+    telefonoWhatsapp: clienteWhatsapp,
+    nombreDestino: 'El cliente',
+    saludo: '¡Gracias por su compra! 🙏',
+    resumenLinea: `🛍️ Venta ${numeroComprobante} — total ${fmt(totals.total)}`,
+    pie: '_Conserve este comprobante para cambios, garantías y consultas._',
+    generarHtmlPdf,
+    nombreArchivo,
+    tituloDialogo: 'Comprobante de venta',
+  }), [venta, carrito, totals, clienteWhatsapp, logoUri]);
+
+  // Para cuando el cliente no tiene WhatsApp registrado (o es Consumidor
+  // Final): el vendedor elige a dónde mandarlo desde el menú de compartir.
+  const compartirComprobante = useCallback(() => compartirPdf({
+    generarHtmlPdf,
+    nombreArchivo,
+    tituloDialogo: 'Comprobante de venta',
+  }), [venta, carrito, totals, logoUri]);
 
   const tipoPago = totals.tipoPago;
   const esCredito = tipoPago === 'credito';
@@ -188,7 +174,7 @@ export default function VentaRegistradaScreen({ navigation, route }) {
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
 
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 10 }]}>
         <Text style={s.headerTitle}>Venta registrada</Text>
       </View>
 
@@ -227,12 +213,20 @@ export default function VentaRegistradaScreen({ navigation, route }) {
           </View>
           <View style={s.sep} />
           {esCredito ? (
-            <View style={[s.totRow, { backgroundColor: '#fff8e1', borderRadius: 10, padding: 10, marginTop: 8 }]}>
-              <Text style={{ color: '#7a5900', fontWeight: '700', fontSize: 14 }}>💰 Prima inicial</Text>
-              <Text style={{ color: totals.pagoVal > 0 ? '#F5A623' : '#aaa', fontWeight: '900', fontSize: 16 }}>
-                {totals.pagoVal > 0 ? fmt(totals.pagoVal) : 'Sin prima'}
-              </Text>
-            </View>
+            <>
+              <View style={[s.totRow, { backgroundColor: '#fff8e1', borderRadius: 10, padding: 10, marginTop: 8 }]}>
+                <Text style={{ color: '#7a5900', fontWeight: '700', fontSize: 14 }}>💰 Prima inicial</Text>
+                <Text style={{ color: totals.pagoVal > 0 ? '#F5A623' : '#aaa', fontWeight: '900', fontSize: 16 }}>
+                  {totals.pagoVal > 0 ? fmt(totals.pagoVal) : 'Sin prima'}
+                </Text>
+              </View>
+              <View style={[s.totRow, { paddingTop: 8 }]}>
+                <Text style={s.totLabel}>Saldo pendiente</Text>
+                <Text style={[s.totVal, { color: '#e65100', fontWeight: '800' }]}>
+                  {fmt(Math.max(0, totals.total - (totals.pagoVal || 0)))}
+                </Text>
+              </View>
+            </>
           ) : (
             <>
               <View style={s.totRow}>
@@ -281,6 +275,10 @@ export default function VentaRegistradaScreen({ navigation, route }) {
             </TouchableOpacity>
           ) : null}
 
+          <TouchableOpacity style={s.btnPdf} onPress={compartirComprobante}>
+            <Text style={s.btnPdfTxt}>📄  Compartir comprobante en PDF</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity style={s.btnPrint} onPress={imprimir} disabled={printing}>
             {printing
               ? <ActivityIndicator color="#444" />
@@ -310,7 +308,7 @@ const s = StyleSheet.create({
   root:   { flex: 1, backgroundColor: '#f5f6fa' },
   header: {
     backgroundColor: '#1565C0',
-    paddingTop: (StatusBar.currentHeight || 0) + 10,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
     paddingBottom: 18, paddingHorizontal: 20,
   },
   headerTitle: { color: '#fff', fontSize: 22, fontWeight: '800' },
@@ -352,6 +350,8 @@ const s = StyleSheet.create({
   btns:        { marginHorizontal: 12, marginTop: 16, gap: 10 },
   btnWa:       { backgroundColor: '#25D366', borderRadius: 12, paddingVertical: 16, alignItems: 'center', elevation: 2 },
   btnWaTxt:    { color: '#fff', fontWeight: '800', fontSize: 15 },
+  btnPdf:      { backgroundColor: '#fff', borderRadius: 12, paddingVertical: 16, alignItems: 'center', borderWidth: 1.5, borderColor: '#1565C0' },
+  btnPdfTxt:   { color: '#1565C0', fontWeight: '800', fontSize: 15 },
   btnPrint:    { backgroundColor: '#fff', borderRadius: 12, paddingVertical: 16, alignItems: 'center', borderWidth: 1.5, borderColor: '#bbb' },
   btnPrintTxt: { color: '#444', fontWeight: '700', fontSize: 15 },
   btnPrimary:  { backgroundColor: '#1565C0', borderRadius: 12, paddingVertical: 16, alignItems: 'center', elevation: 2 },

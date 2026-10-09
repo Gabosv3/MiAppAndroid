@@ -1,5 +1,6 @@
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import LoginScreen from '../screens/LoginScreen';
 import HomeScreen from '../screens/HomeScreen';
@@ -25,27 +26,42 @@ import RegistrarPreventaScreen from '../screens/RegistrarPreventaScreen';
 import MisPreventasScreen from '../screens/MisPreventasScreen';
 import CambiarPinScreen from '../screens/CambiarPinScreen';
 import MiDesempenoScreen from '../screens/MiDesempenoScreen';
+import AdminKPIsScreen from '../screens/AdminKPIsScreen';
+import AdminResumenesScreen from '../screens/AdminResumenesScreen';
+import AdminAsignacionesScreen from '../screens/AdminAsignacionesScreen';
+import AdminResumenDetalleScreen from '../screens/AdminResumenDetalleScreen';
 import RutasSupervisadasScreen from '../screens/RutasSupervisadasScreen';
 import HistorialRutaSupervisadaScreen from '../screens/HistorialRutaSupervisadaScreen';
 import RegistrarSupervisionScreen from '../screens/RegistrarSupervisionScreen';
 import DesempenoCobradoresScreen from '../screens/DesempenoCobradoresScreen';
 import EncuestaClienteScreen from '../screens/EncuestaClienteScreen';
+import DiagnosticoScreen from '../screens/DiagnosticoScreen';
+import AyudaScreen from '../screens/AyudaScreen';
 
 const Stack = createNativeStackNavigator();
 
 export default function AppNavigator() {
   const { user, initialized } = useAuth();
+  const insets = useSafeAreaInsets();
+  // En Android reciente (targetSdk 35+) el modo edge-to-edge es obligatorio
+  // — el contenido se dibuja detrás de la barra de navegación del sistema.
+  // Casi ninguna pantalla manejaba el espacio de abajo por su cuenta, así
+  // que los botones al final (ej. "Finalizar venta") quedaban tapados por
+  // esa barra en teléfonos con navegación por gestos o por botones. En vez
+  // de tocar las ~30 pantallas una por una, se le da el espacio aquí, a
+  // nivel del navegador, para que aplique a todas de una vez.
+  const contentStyle = { paddingBottom: insets.bottom };
 
   if (!initialized) {
     return (
-      <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
+      <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade', contentStyle }}>
         <Stack.Screen name="Login" component={LoginScreen} />
       </Stack.Navigator>
     );
   }
 
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
+    <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade', contentStyle }}>
       {user ? (
         <>
           <Stack.Screen name="Home"            component={HomeScreen} />
@@ -71,11 +87,17 @@ export default function AppNavigator() {
           <Stack.Screen name="MisPreventas"     component={MisPreventasScreen}     options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="CambiarPin"       component={CambiarPinScreen}       options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="MiDesempeno"      component={MiDesempenoScreen}      options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="AdminKPIs"        component={AdminKPIsScreen}        options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="AdminResumenes"   component={AdminResumenesScreen}   options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="AdminAsignaciones" component={AdminAsignacionesScreen} options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="AdminResumenDetalle" component={AdminResumenDetalleScreen} options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="RutasSupervisadas" component={RutasSupervisadasScreen} options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="HistorialRutaSupervisada" component={HistorialRutaSupervisadaScreen} options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="RegistrarSupervision" component={RegistrarSupervisionScreen} options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="DesempenoCobradores" component={DesempenoCobradoresScreen} options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="EncuestaCliente"  component={EncuestaClienteScreen}  options={{ animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="Diagnostico"      component={DiagnosticoScreen}      options={{ animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="Ayuda"            component={AyudaScreen}            options={{ animation: 'slide_from_bottom' }} />
         </>
       ) : (
         <Stack.Screen name="Login" component={LoginScreen} />

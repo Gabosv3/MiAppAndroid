@@ -4,9 +4,10 @@ import {
   ScrollView, TextInput, ActivityIndicator, Alert, FlatList,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import api, { esErrorTransitorio } from '../services/api';
+import api, { esErrorTransitorio, TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
@@ -23,6 +24,7 @@ const OPCIONES_SINO = [
 ];
 
 export default function EncuestaClienteScreen({ route, navigation }) {
+  const insets = useSafeAreaInsets();
   const { rutaId, rutaNombre } = route.params;
   const { isOnline } = useConnectivity();
 
@@ -46,7 +48,7 @@ export default function EncuestaClienteScreen({ route, navigation }) {
     (async () => {
       if (!isOnline) { setCargandoClientes(false); return; }
       try {
-        const { data } = await api.get(`/cobros/rutas/${rutaId}/clientes`);
+        const { data } = await api.get(`/cobros/rutas/${rutaId}/clientes`, { timeout: TIMEOUT_LECTURA_CACHE });
         setClientes(data.clientes || data || []);
       } catch (e) {
         Alert.alert('Error', 'No se pudieron cargar los clientes de la ruta.');
@@ -130,7 +132,7 @@ export default function EncuestaClienteScreen({ route, navigation }) {
     return (
       <View style={s.root}>
         <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
-        <View style={s.header}>
+        <View style={[s.header, { paddingTop: insets.top + 8 }]}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Text style={s.backArrow}>←</Text>
           </TouchableOpacity>
@@ -186,7 +188,7 @@ export default function EncuestaClienteScreen({ route, navigation }) {
   return (
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={() => setCliente(null)} style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Text style={s.backArrow}>←</Text>
         </TouchableOpacity>
@@ -309,7 +311,8 @@ const s = StyleSheet.create({
   errorTxt: { color: '#888', textAlign: 'center', fontSize: 13 },
   header: {
     backgroundColor: '#1565C0', flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingTop: (StatusBar.currentHeight || 0) + 8, paddingBottom: 16, paddingHorizontal: 16,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom: 16, paddingHorizontal: 16,
   },
   backBtn: {},
   backArrow: { color: '#fff', fontSize: 24 },

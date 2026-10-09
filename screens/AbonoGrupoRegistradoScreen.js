@@ -1,16 +1,21 @@
 import React, { useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView, Linking, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import { fmtFechaCorta } from '../services/dateUtils';
+import { fmtFechaCorta, fechaHoyLocal } from '../services/dateUtils';
+import { enviarReciboPorWhatsApp, htmlPieInformativo, htmlMetodosPago } from '../services/reciboWhatsApp';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 const capitalizar = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 
 const METODOS_LABEL = { efectivo: 'Efectivo', transferencia: 'Transferencia', cheque: 'Cheque', deposito: 'Depósito' };
 
-const buildHtmlRecibo = ({ aplicados, metodo, proximaVisita, nombreCobrador }) => {
+// pdf=true: mismo contenido en una página legible en el teléfono del cliente
+// y con la página web al pie. La impresión del ticket no cambia.
+const buildHtmlRecibo = ({ aplicados, metodo, proximaVisita, nombreCobrador, pdf = false }) => {
+  const px = (n) => Math.round(n * (pdf ? 1.36 : 1));
   const fecha = fmtFechaCorta(new Date());
   const proxFmt = proximaVisita ? fmtFechaCorta(proximaVisita) : '';
   const okAplicados = aplicados.filter(a => a.ok);
@@ -21,7 +26,7 @@ const buildHtmlRecibo = ({ aplicados, metodo, proximaVisita, nombreCobrador }) =
   const filasHtml = aplicados.map(a => `
     <div style="padding:4px 0">
       <div class="row"><span class="b">${a.ok ? '✔' : '✘'} ${a.clienteNombre}</span><span class="b">${a.sinPago ? '' : (a.numeroRecibo || (a.ok ? '' : 'ERROR'))}</span></div>
-      ${a.producto ? `<div style="font-size:10px;color:#666">${a.producto}</div>` : ''}
+      ${a.producto ? `<div style="font-size:${px(10)}px;color:#666">${a.producto}</div>` : ''}
       ${a.ok && a.sinPago ? `
       <div class="row" style="margin-top:2px"><span>Debía:</span><span style="color:#c62828">${fmt(a.saldoAntes)}</span></div>
       <div class="row"><span style="color:#e65100;font-weight:800">No abonó</span><span></span></div>
@@ -36,15 +41,15 @@ const buildHtmlRecibo = ({ aplicados, metodo, proximaVisita, nombreCobrador }) =
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <style>
       *{box-sizing:border-box;margin:0;padding:0}
-      body{font-family:Arial,Helvetica,sans-serif;width:220px;margin:0 auto;padding:6px 4px;font-size:11px;line-height:1.5;color:#111}
+      body{font-family:Arial,Helvetica,sans-serif;width:${pdf ? 480 : 220}px;margin:0 auto;padding:${pdf ? "28px 8px" : "6px 4px"};font-size:${px(11)}px;line-height:1.5;color:#111}
       .c{text-align:center}
       .b{font-weight:700}
       .row{display:flex;justify-content:space-between;align-items:center}
       .div{border-top:1px solid #999;margin:5px 0}
-      .tot{font-size:14px}
+      .tot{font-size:${px(14)}px}
     </style>
   </head><body>
-    <div class="c b" style="font-size:14px">DISTRIBUIDORA BM</div>
+    <div class="c b" style="font-size:${px(14)}px">DISTRIBUIDORA BM</div>
     <div class="c">6047-9762</div>
     <div style="height:8px"></div>
     <div class="row"><span class="b">ABONO GRUPAL</span><span>${fecha}</span></div>
@@ -57,9 +62,9 @@ const buildHtmlRecibo = ({ aplicados, metodo, proximaVisita, nombreCobrador }) =
     <div class="row"><span>Total debía:</span><span style="color:#c62828">${fmt(totalDebia)}</span></div>
     <div class="row tot"><span class="b">Total abonado:</span><span class="b" style="color:#1b5e20">${fmt(totalAbonado)}</span></div>
     <div class="row"><span>Total resta:</span><span style="color:#e65100">${fmt(totalResta)}</span></div>
-    ${proxFmt ? `<div class="div"></div><div class="c" style="font-size:9px;color:#888">PROXIMA VISITA</div><div class="c b" style="font-size:12px;">${proxFmt}</div>` : ''}
+    ${proxFmt ? `<div class="div"></div><div class="c" style="font-size:${px(9)}px;color:#888">PROXIMA VISITA</div><div class="c b" style="font-size:${px(12)}px;">${proxFmt}</div>` : ''}
     <div class="div"></div>
-    <div class="c">Gracias por su pago</div>
+    <div class="c">Gracias por su pago</div>${pdf ? htmlPieInformativo(px(10)) : `<div class="div"></div>${htmlMetodosPago(px(10))}`}
   </body></html>`;
 };
 
@@ -89,55 +94,21 @@ const imprimirRecibo = async (params) => {
   }
 };
 
-const enviarWhatsApp = async ({ aplicados, metodo, proximaVisita, nombreCobrador, clienteWhatsapp, clienteNombreDestino }) => {
-  const fecha = new Date().toLocaleDateString('es-SV');
-  const proxFmt = proximaVisita
-    ? new Date(proximaVisita + 'T12:00:00').toLocaleDateString('es-SV', { day: '2-digit', month: 'long', year: 'numeric' })
-    : '';
-  const okAplicados = aplicados.filter(a => a.ok);
-  const totalAbonado = okAplicados.reduce((s, a) => s + a.monto, 0);
-  const totalResta = okAplicados.reduce((s, a) => s + a.saldoDespues, 0);
-
-  const lineasCuentas = okAplicados.map(a => a.sinPago
-    ? `• ${a.clienteNombre}${a.producto ? ` (${a.producto})` : ''}: NO ABONÓ — debía ${fmt(a.saldoAntes)}`
-    : `• ${a.clienteNombre}${a.producto ? ` (${a.producto})` : ''}: abona ${fmt(a.monto)}, resta ${fmt(a.saldoDespues)} — recibo ${a.numeroRecibo || 'N/A'}`
-  ).join('\n');
-
-  const mensaje =
-`🏪 *DISTRIBUIDORA BM*
-📋 *RECIBO DE ABONO GRUPAL*
-━━━━━━━━━━━━━━━━━━━━
-📅 Fecha: ${fecha}
-📞 Teléfono: 6047-9762
-💳 Método: ${capitalizar(metodo)}
-👷 Cobrador: ${nombreCobrador}
-
-${lineasCuentas}
-
-💰 *Total abonado: ${fmt(totalAbonado)}*
-📉 Total resta: ${fmt(totalResta)}
-${proxFmt ? `\n📅 *Próxima visita: ${proxFmt}*` : ''}
-━━━━━━━━━━━━━━━━━━━━
-¡Gracias por su pago! 🙏
-
-_Por favor confirme respondiendo *SÍ* si este recibo corresponde a su pago. En caso de alguna diferencia, comuníquese con nosotros._`;
-
-  const telefono = (clienteWhatsapp || '').replace(/\D/g, '');
-  if (!telefono) {
-    Alert.alert('Sin teléfono', `${clienteNombreDestino || 'Este cliente'} no tiene número de WhatsApp registrado.`);
-    return;
-  }
-  const numero = telefono.startsWith('503') ? telefono : `503${telefono}`;
-  const url = `https://wa.me/${numero}?text=${encodeURIComponent(mensaje)}`;
-  const puede = await Linking.canOpenURL(url);
-  if (puede) {
-    await Linking.openURL(url);
-  } else {
-    Alert.alert('WhatsApp no disponible', 'No se encontró WhatsApp instalado en este dispositivo.');
-  }
+// Texto con la página web + recibo en PDF (ver services/reciboWhatsApp.js).
+const enviarWhatsApp = ({ aplicados, metodo, proximaVisita, nombreCobrador, clienteWhatsapp, clienteNombreDestino }) => {
+  const totalAbonado = aplicados.filter(a => a.ok).reduce((s, a) => s + a.monto, 0);
+  return enviarReciboPorWhatsApp({
+    telefonoWhatsapp: clienteWhatsapp,
+    nombreDestino: clienteNombreDestino,
+    resumenLinea: `📋 Abono grupal — total abonado ${fmt(totalAbonado)}`,
+    generarHtmlPdf: () => buildHtmlRecibo({ aplicados, metodo, proximaVisita, nombreCobrador, pdf: true }),
+    nombreArchivo: `Recibo-abono-grupal-${fechaHoyLocal()}`,
+    tituloDialogo: 'Recibo de abono grupal',
+  });
 };
 
 export default function AbonoGrupoRegistradoScreen({ navigation, route }) {
+  const insets = useSafeAreaInsets();
   const {
     aplicados = [], metodo, proximaVisita, nombreCobrador,
     clienteId, clienteNombre, clienteWhatsapp,
@@ -160,7 +131,7 @@ export default function AbonoGrupoRegistradoScreen({ navigation, route }) {
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
 
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 10 }]}>
         <Text style={s.headerTitle}>Abono grupal registrado</Text>
         <Text style={s.headerSub}>{aplicados.length} cuenta{aplicados.length !== 1 ? 's' : ''} del grupo gestionada{aplicados.length !== 1 ? 's' : ''}</Text>
       </View>
@@ -261,7 +232,9 @@ export default function AbonoGrupoRegistradoScreen({ navigation, route }) {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#f5f6fa' },
-  header: { backgroundColor: '#1565C0', paddingTop: (StatusBar.currentHeight || 0) + 10, paddingBottom: 18, paddingHorizontal: 20 },
+  header: { backgroundColor: '#1565C0',
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom: 18, paddingHorizontal: 20 },
   headerTitle: { color: '#fff', fontSize: 20, fontWeight: '800' },
   headerSub: { color: 'rgba(255,255,255,0.75)', fontSize: 12, fontWeight: '600', marginTop: 2 },
 

@@ -1,16 +1,18 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, StatusBar,
-  ScrollView, ActivityIndicator, Linking, Modal, TextInput, Alert, Platform,
+  ScrollView, ActivityIndicator, Linking, Modal, TextInput, Alert, Platform, Image,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import api, { esErrorTransitorio } from '../services/api';
+import api, { esErrorTransitorio, TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import { guardarClienteCache, leerClienteCache, generarNumeroRecibo, encolarPago, guardarEnHistorial, marcarClienteVisitado } from '../services/cobrosOffline';
 import * as offlineQueue from '../services/offlineQueue';
 import * as Location from 'expo-location';
+import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../context/AuthContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 const initials = (name='') => name.trim().split(/\s+/).slice(0,2).map(w=>w[0]?.toUpperCase()||'').join('');
@@ -23,6 +25,7 @@ const METODOS_GRUPO = [
 ];
 
 export default function DetalleClienteScreen({ navigation, route }) {
+  const insets = useSafeAreaInsets();
   const { clienteId, clienteNombre } = route.params;
   const { user } = useAuth();
   const nombreCobrador = user?.name || user?.full_name || user?.nombre || user?.usuario || 'Cobrador';
@@ -40,6 +43,37 @@ export default function DetalleClienteScreen({ navigation, route }) {
   const [modalRei,      setModalRei]      = useState(null); // { ventaId, ventaNumero }
   const [reiMotivo,     setReiMotivo]     = useState('');
   const [savingRei,     setSavingRei]     = useState(false);
+  const [modalGar,      setModalGar]      = useState(null); // { ventaId, ventaNumero }
+  const [garMotivo,     setGarMotivo]     = useState('');
+  const [garDescripcion,setGarDescripcion]= useState('');
+  const [garFotos,      setGarFotos]      = useState([]); // [{ uri, name, type }]
+  const [savingGar,     setSavingGar]     = useState(false);
+  const [fotoError,     setFotoError]     = useState(false); // la foto de la casa no cargó (ej. sin señal)
+  const [fotoAmpliada,  setFotoAmpliada]  = useState(false);
+
+  const MAX_FOTOS_GARANTIA = 5;
+
+  const tomarFotoGarantia = async () => {
+    if (garFotos.length >= MAX_FOTOS_GARANTIA) {
+      Alert.alert('Límite alcanzado', `Máximo ${MAX_FOTOS_GARANTIA} fotos por garantía.`);
+      return;
+    }
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') { Alert.alert('Permiso requerido', 'Necesitamos acceso a la cámara.'); return; }
+      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7 });
+      if (!result.canceled && result.assets?.[0]) {
+        const foto = { uri: result.assets[0].uri, name: `garantia_${Date.now()}.jpg`, type: 'image/jpeg' };
+        setGarFotos(prev => [...prev, foto]);
+      }
+    } catch (e) {
+      Alert.alert('Error', 'No se pudo tomar la foto: ' + (e?.message || String(e)));
+    }
+  };
+
+  const quitarFotoGarantia = (index) => {
+    setGarFotos(prev => prev.filter((_, i) => i !== index));
+  };
   const [modalNombre,   setModalNombre]   = useState(false);
   const [editNombre,    setEditNombre]    = useState('');
   const [editApellido,  setEditApellido]  = useState('');
@@ -68,7 +102,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
     if (!isOnline) return;
     setLoadingGrupo(true);
     try {
-      const { data } = await api.get(`/clientes/${clienteId}/grupo`);
+      const { data } = await api.get(`/clientes/${clienteId}/grupo`, { timeout: TIMEOUT_LECTURA_CACHE });
       setGrupo(data);
     } catch { /* silencioso, sección opcional */ }
     finally { setLoadingGrupo(false); }
@@ -298,6 +332,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
           clienteId: cta.cliente_id, clienteNombre: cta.clienteNombre,
           ventaNumero: cta.venta_numero || null, numeroRecibo, producto: cta.producto,
           monto: aPagar, metodo: metodoAbonoGrupo,
+          saldoAntes: cta.saldo, saldoDespues: Math.max(0, cta.saldo - aPagar),
           proximaVisitaFecha: proxVisita,
           pagoOfflineId: pagoEncolado.id,
           resultado: { ok: true, mensaje: 'Cobro pendiente de envío (offline)', proxima_cuota: null },
@@ -360,19 +395,50 @@ export default function DetalleClienteScreen({ navigation, route }) {
   const cargar = useCallback(async () => {
     try {
       setError('');
+
+      // clienteId llega por route.params — si alguna pantalla lo pasa mal
+      // (undefined, null) antes esto pegaba directo a /cobros/clientes/undefined
+      // y lo que sea que respondiera el servidor terminaba pintándose tal
+      // cual (nombre, saldo, todo en blanco) en vez de avisar que nunca hubo
+      // un cliente real que cargar.
+      if (!clienteId) {
+        setError('No se recibió el cliente a mostrar. Volvé atrás e intentá de nuevo.');
+        return;
+      }
+
       if (isOnline) {
-        const res = await api.get(`/cobros/clientes/${clienteId}`);
+        // Si YA hay un respaldo de este cliente, vale la pena fallar rápido
+        // (timeout corto) porque hay algo decente que mostrar si la
+        // conexión está lenta. Pero si nunca se ha guardado nada de este
+        // cliente (ej. primera vez que se abre hoy), cortar a los 8s solo
+        // deja al cobrador con una pantalla de error en vez de dejar que
+        // una conexión lenta-pero-funcional termine de responder — ahí es
+        // mejor tener paciencia (timeout normal) que fallar rápido.
+        const cachePrevio = await leerClienteCache(clienteId);
+        const timeout = cachePrevio ? TIMEOUT_LECTURA_CACHE : undefined;
+        const res = await api.get(`/cobros/clientes/${clienteId}`, timeout ? { timeout } : undefined);
+
+        // Antes, si por lo que sea el servidor respondía 200 pero sin el
+        // objeto "cliente" (respuesta inesperada, interceptor raro, etc.),
+        // esto se guardaba y pintaba tal cual — pantalla en blanco sin
+        // ningún aviso. Ahora, si no viene el cliente, se trata como una
+        // respuesta inválida y cae al mismo manejo que un error de red.
+        if (!res?.data?.cliente) {
+          throw new Error('El servidor respondió sin los datos del cliente.');
+        }
+
         await guardarClienteCache(clienteId, res.data);
         setData(res.data);
         setEsCache(false);
+        setFotoError(false);
       } else {
         const cache = await leerClienteCache(clienteId);
-        if (cache) { setData(cache.data); setEsCache(true); }
+        if (cache?.data?.cliente) { setData(cache.data); setEsCache(true); }
         else setError('Sin conexión y no hay datos guardados para este cliente.');
       }
     } catch(e) {
       const cache = await leerClienteCache(clienteId);
-      if (cache) { setData(cache.data); setEsCache(true); }
+      if (cache?.data?.cliente) { setData(cache.data); setEsCache(true); }
       else setError(e?.message||'Error');
     }
     finally { setLoading(false); }
@@ -544,6 +610,63 @@ export default function DetalleClienteScreen({ navigation, route }) {
     }
   };
 
+  // A diferencia de un reintegro, reportar una garantía NO saca al cliente
+  // de su ruta — sigue pagando su cuota normal mientras se revisa/repara.
+  const resetModalGarantia = () => {
+    setModalGar(null);
+    setGarMotivo('');
+    setGarDescripcion('');
+    setGarFotos([]);
+  };
+
+  const enviarGarantia = async () => {
+    if (!garDescripcion.trim()) {
+      Alert.alert('Descripción requerida', 'Describe cuál es el problema con el producto.');
+      return;
+    }
+    setSavingGar(true);
+    // Generada una vez, reutilizada si termina en la cola offline — para que
+    // un reintento tras timeout no reporte la misma garantía dos veces.
+    const idempotencyKey = `garantia-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const payloadBase = {
+      venta_id: modalGar.ventaId,
+      motivo: garMotivo.trim(),
+      descripcion: garDescripcion.trim(),
+      idempotency_key: idempotencyKey,
+      ...(garFotos.length ? { fotos: garFotos } : {}),
+    };
+    const encolar = async () => {
+      await offlineQueue.enqueueRequest({
+        method: 'POST', url: '/garantias',
+        label: `Garantía venta ${modalGar.ventaNumero || modalGar.ventaId}`,
+        data: payloadBase, useFormData: true,
+      });
+      resetModalGarantia();
+      Alert.alert('📴 Guardado sin conexión', 'La garantía (con sus fotos) se enviará cuando recuperes la señal.');
+    };
+    try {
+      if (isOnline) {
+        const formData = new FormData();
+        formData.append('venta_id', String(modalGar.ventaId));
+        if (garMotivo.trim()) formData.append('motivo', garMotivo.trim());
+        formData.append('descripcion', garDescripcion.trim());
+        formData.append('idempotency_key', idempotencyKey);
+        garFotos.forEach(foto => formData.append('fotos[]', { uri: foto.uri, name: foto.name, type: foto.type }));
+
+        await api.post('/garantias', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+        resetModalGarantia();
+        Alert.alert('✅ Garantía reportada', 'Un administrador la asignará para su revisión.');
+      } else {
+        await encolar();
+      }
+    } catch (e) {
+      if (esErrorTransitorio(e)) await encolar();
+      else Alert.alert('Error', e?.response?.data?.message || 'No se pudo reportar la garantía');
+    } finally {
+      setSavingGar(false);
+    }
+  };
+
   const cliente = data?.cliente;
   const resumen = data?.resumen;
   const ventas  = data?.ventas||[];
@@ -610,7 +733,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0"/>
 
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={()=>navigation.goBack()} style={s.backBtn} hitSlop={{top:10,bottom:10,left:10,right:10}}>
           <Text style={s.backArrow}>←</Text>
         </TouchableOpacity>
@@ -669,7 +792,40 @@ export default function DetalleClienteScreen({ navigation, route }) {
                 <Text style={s.saldoVal}>{fmt(cliente?.saldo_total)}</Text>
               </View>
             </View>
+
+            {/* Último abono — para que el cobrador vea de un vistazo si el
+                cliente lleva mucho tiempo sin pagar, sin abrir cada cuota. */}
+            <View style={[s.ultimoPagoBox, cliente?.ultimo_pago?.dias >= 30 && s.ultimoPagoBoxAlerta]}>
+              {cliente?.ultimo_pago ? (
+                <Text style={[s.ultimoPagoTxt, cliente.ultimo_pago.dias >= 30 && s.ultimoPagoTxtAlerta]}>
+                  💵 Último abono: {fmt(cliente.ultimo_pago.monto)} el {cliente.ultimo_pago.fecha}
+                  {' '}({cliente.ultimo_pago.dias === 0 ? 'hoy' : cliente.ultimo_pago.dias === 1 ? 'ayer' : `hace ${cliente.ultimo_pago.dias} días`})
+                </Text>
+              ) : (
+                <Text style={s.ultimoPagoTxt}>💵 Este cliente aún no registra abonos</Text>
+              )}
+            </View>
           </View>
+
+          {/* ── Foto de la casa (solo si el cliente tiene una registrada) ── */}
+          {cliente?.foto_casa ? (
+            <View style={s.fotoCasaCard}>
+              <Text style={s.fotoCasaTitulo}>📷 Foto de la casa</Text>
+              {fotoError ? (
+                <Text style={s.fotoCasaError}>No se pudo cargar la foto. Revisá tu conexión e intentá de nuevo.</Text>
+              ) : (
+                <TouchableOpacity activeOpacity={0.9} onPress={() => setFotoAmpliada(true)}>
+                  <Image
+                    source={{ uri: cliente.foto_casa }}
+                    style={s.fotoCasaImg}
+                    resizeMode="cover"
+                    onError={() => setFotoError(true)}
+                  />
+                  <Text style={s.fotoCasaHint}>Tocá la foto para ampliarla</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          ) : null}
 
           {/* Botones de acción */}
           <View style={s.accionRow}>
@@ -687,6 +843,20 @@ export default function DetalleClienteScreen({ navigation, route }) {
                   : (cliente?.latitud && cliente?.longitud) ? 'Dirigir\nubicación' : 'Actualizar\nubicación'}
               </Text>
             </TouchableOpacity>
+            {/* Si ya hay coordenadas guardadas, el botón de arriba solo abre el
+                mapa — este botón aparte siempre deja re-capturar el GPS, por
+                si la ubicación guardada quedó mal (se equivocaron de casa,
+                el GPS falló, etc.) sin tener que borrar nada primero. */}
+            {!!(cliente?.latitud && cliente?.longitud) && (
+              <TouchableOpacity
+                style={[s.ubicBtn, { flex: 0, width: 64 }, updatingUbic && { opacity: 0.5 }]}
+                onPress={actualizarUbicacion}
+                disabled={updatingUbic}
+              >
+                <Text style={{ fontSize: 22 }}>{updatingUbic ? '⏳' : '🔄'}</Text>
+                <Text style={[s.ubicBtnTxt, { fontSize: 10 }]}>Corregir</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={[s.telBtn, { flex: 1 }]} onPress={abrirModalTel}>
               <Text style={{ fontSize: 26 }}>📞</Text>
               <Text style={s.telBtnTxt}>{'Editar\nteléfonos'}</Text>
@@ -857,6 +1027,12 @@ export default function DetalleClienteScreen({ navigation, route }) {
                   >
                     <Text style={s.reintegroBtnTxt}>📦 Reintegro</Text>
                   </TouchableOpacity>
+                  <TouchableOpacity
+                    style={s.garantiaBtn}
+                    onPress={() => { setModalGar({ ventaId: venta.id, ventaNumero: venta.numero_venta }); setGarMotivo(''); setGarDescripcion(''); setGarFotos([]); }}
+                  >
+                    <Text style={s.garantiaBtnTxt}>🛡️ Garantía</Text>
+                  </TouchableOpacity>
                 </View>
               </View>
             );
@@ -896,13 +1072,6 @@ export default function DetalleClienteScreen({ navigation, route }) {
             <Text style={{ fontSize: 18, color: '#e65100' }}>›</Text>
           </TouchableOpacity>
 
-          {/* ── Gestiones ── */}
-          <TouchableOpacity style={s.gestionesRow}>
-            <Text style={{fontSize:20}}>📋</Text>
-            <Text style={s.gestionesTxt}>Ver gestiones pendientes</Text>
-            <Text style={{fontSize:20,color:'#1565C0'}}>›</Text>
-          </TouchableOpacity>
-
           <View style={{height:32}}/>
         </ScrollView>
       )}
@@ -933,6 +1102,69 @@ export default function DetalleClienteScreen({ navigation, route }) {
             <TouchableOpacity style={s.cancelBtn} onPress={() => setModalRei(null)}>
               <Text style={s.cancelBtnTxt}>Cancelar</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal garantía */}
+      <Modal visible={!!modalGar} transparent animationType="slide" onRequestClose={() => setModalGar(null)}>
+        <View style={s.modalOverlay}>
+          <View style={[s.modalBox, { maxHeight: '85%' }]}>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={s.modalTitle}>🛡️ Reportar garantía</Text>
+              <Text style={s.modalSub}>{cliente?.nombre} · {modalGar?.ventaNumero}</Text>
+
+              <Text style={s.modalLabel}>Motivo (corto)</Text>
+              <TextInput
+                style={s.modalInput}
+                value={garMotivo}
+                onChangeText={setGarMotivo}
+                placeholder="Ej: No enfría, golpe en transporte, no enciende"
+              />
+
+              <Text style={s.modalLabel}>Descripción del problema *</Text>
+              <TextInput
+                style={[s.modalInput, { minHeight: 80, textAlignVertical: 'top' }]}
+                value={garDescripcion}
+                onChangeText={setGarDescripcion}
+                placeholder="Ej: Refrigeradora no enfría, sofá con costura descosida..."
+                multiline
+              />
+
+              <Text style={s.modalLabel}>Fotos del producto dañado ({garFotos.length}/{MAX_FOTOS_GARANTIA})</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 }}>
+                {garFotos.map((foto, i) => (
+                  <View key={foto.uri} style={{ width: 72, height: 72 }}>
+                    <Image source={{ uri: foto.uri }} style={{ width: 72, height: 72, borderRadius: 8 }} />
+                    <TouchableOpacity
+                      onPress={() => quitarFotoGarantia(i)}
+                      style={{ position: 'absolute', top: -6, right: -6, backgroundColor: '#B71C1C', borderRadius: 10, width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}
+                    >
+                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                {garFotos.length < MAX_FOTOS_GARANTIA && (
+                  <TouchableOpacity
+                    onPress={tomarFotoGarantia}
+                    style={{ width: 72, height: 72, borderRadius: 8, borderWidth: 1.5, borderColor: '#EF6C00', borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    <Text style={{ fontSize: 22 }}>📸</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              <TouchableOpacity
+                style={[s.guardarBtn, { backgroundColor: '#EF6C00', marginTop: 8 }, savingGar && { opacity: 0.6 }]}
+                onPress={enviarGarantia}
+                disabled={savingGar}
+              >
+                <Text style={s.guardarBtnTxt}>{savingGar ? 'Enviando...' : '🛡️ Confirmar garantía'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.cancelBtn} onPress={() => setModalGar(null)}>
+                <Text style={s.cancelBtnTxt}>Cancelar</Text>
+              </TouchableOpacity>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -1195,6 +1427,16 @@ export default function DetalleClienteScreen({ navigation, route }) {
           </View>
         </View>
       </Modal>
+
+      {/* Foto de la casa ampliada */}
+      <Modal visible={fotoAmpliada} transparent animationType="fade" onRequestClose={() => setFotoAmpliada(false)}>
+        <TouchableOpacity style={s.fotoModalFondo} activeOpacity={1} onPress={() => setFotoAmpliada(false)}>
+          {cliente?.foto_casa ? (
+            <Image source={{ uri: cliente.foto_casa }} style={s.fotoModalImg} resizeMode="contain" />
+          ) : null}
+          <Text style={s.fotoModalCerrar}>Tocá para cerrar</Text>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -1204,7 +1446,8 @@ const s = StyleSheet.create({
   centered:{ flex:1, alignItems:'center', justifyContent:'center', padding:24 },
   header: {
     backgroundColor:'#1565C0', flexDirection:'row', alignItems:'center',
-    paddingTop:(StatusBar.currentHeight||0)+8, paddingBottom:16, paddingHorizontal:16,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom:16, paddingHorizontal:16,
   },
   backBtn:   { marginRight:12 },
   backArrow: { color:'#fff', fontSize:24 },
@@ -1225,6 +1468,19 @@ const s = StyleSheet.create({
   saldoBox:        { alignItems:'flex-end' },
   saldoLabel:      { color:'#999', fontSize:10, fontWeight:'600', marginBottom:2 },
   saldoVal:        { color:'#e53e3e', fontSize:20, fontWeight:'900' },
+  ultimoPagoBox:      { marginTop:12, paddingTop:12, borderTopWidth:1, borderTopColor:'#eee' },
+  ultimoPagoBoxAlerta:{ borderTopColor:'#ffccbc' },
+  ultimoPagoTxt:      { color:'#555', fontSize:12.5, fontWeight:'600' },
+
+  fotoCasaCard:   { backgroundColor:'#fff', marginHorizontal:16, marginTop:12, borderRadius:16, padding:14, elevation:2 },
+  fotoCasaTitulo: { fontSize:13, fontWeight:'800', color:'#333', marginBottom:10 },
+  fotoCasaImg:    { width:'100%', height:190, borderRadius:12, backgroundColor:'#eee' },
+  fotoCasaHint:   { fontSize:11, color:'#999', textAlign:'center', marginTop:6 },
+  fotoCasaError:  { fontSize:12, color:'#999', paddingVertical:8 },
+  fotoModalFondo: { flex:1, backgroundColor:'rgba(0,0,0,0.92)', alignItems:'center', justifyContent:'center' },
+  fotoModalImg:   { width:'100%', height:'80%' },
+  fotoModalCerrar:{ color:'#ccc', fontSize:13, marginTop:14 },
+  ultimoPagoTxtAlerta:{ color:'#c62828' },
 
   statsRow:  { flexDirection:'row', marginHorizontal:12, gap:8, marginBottom:4 },
   statCard:  { flex:1, backgroundColor:'#fff', borderRadius:12, padding:12, alignItems:'center', elevation:2, shadowColor:'#000', shadowOffset:{width:0,height:1}, shadowOpacity:0.06 },
@@ -1257,13 +1513,9 @@ const s = StyleSheet.create({
   cobrarBtnTxt:   { color:'#fff', fontWeight:'800', fontSize:14 },
   reintegroBtn:   { backgroundColor:'#fff', borderWidth:1.5, borderColor:'#B71C1C', borderRadius:10, paddingVertical:13, paddingHorizontal:14, alignItems:'center' },
   reintegroBtnTxt:{ color:'#B71C1C', fontWeight:'800', fontSize:13 },
+  garantiaBtn:    { backgroundColor:'#fff', borderWidth:1.5, borderColor:'#EF6C00', borderRadius:10, paddingVertical:13, paddingHorizontal:14, alignItems:'center' },
+  garantiaBtnTxt: { color:'#EF6C00', fontWeight:'800', fontSize:13 },
 
-  gestionesRow: {
-    flexDirection:'row', alignItems:'center', gap:12,
-    backgroundColor:'#fff', marginHorizontal:12, marginTop:4, borderRadius:14, padding:16,
-    elevation:2,
-  },
-  gestionesTxt: { flex:1, color:'#1565C0', fontWeight:'700', fontSize:14 },
   visitaBtn: {
     flexDirection:'row', alignItems:'center', gap:12,
     backgroundColor:'#fff8f0', marginHorizontal:12, marginTop:8, borderRadius:14, padding:16,

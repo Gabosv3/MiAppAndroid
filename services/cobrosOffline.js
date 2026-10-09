@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fechaHoyLocal, fechaLocalDesde } from './dateUtils';
+import * as backupOffline from './backupOffline';
 
 const KEYS = {
   ruta:        'COBROS_RUTA_CACHE',
@@ -61,6 +62,24 @@ export const guardarClienteCache = async (clienteId, data) => {
   await AsyncStorage.setItem(KEYS.clientes, JSON.stringify(cache));
 };
 
+// Cuántos clientes tienen algún respaldo guardado en este teléfono ahora
+// mismo — para poder revisarlo ANTES de salir a la ruta con mala señal, en
+// vez de descubrir a mitad del día que a alguno nunca le tocó precargarse
+// (pasa si la app nunca llegó a cargar la ruta en línea ni una vez ese día).
+// Si se pasa "ids" (los clientes de la ruta de hoy), cuenta solo cuántos de
+// ESOS tienen respaldo — la caché acumula clientes de días anteriores que ya
+// no están en la ruta, y contarlos todos hacía parecer que estaba completo
+// aunque a alguno de hoy le faltara.
+export const contarClientesConRespaldo = async (ids = null) => {
+  const raw = await AsyncStorage.getItem(KEYS.clientes);
+  if (!raw) return 0;
+  try {
+    const cache = JSON.parse(raw);
+    if (!Array.isArray(ids)) return Object.keys(cache).length;
+    return ids.filter((id) => cache[id] !== undefined).length;
+  } catch { return 0; }
+};
+
 export const leerClienteCache = async (clienteId) => {
   const raw = await AsyncStorage.getItem(KEYS.clientes);
   if (!raw) return null;
@@ -68,6 +87,30 @@ export const leerClienteCache = async (clienteId) => {
     const cache = JSON.parse(raw);
     return cache[clienteId] || null;
   } catch { return null; }
+};
+
+// Guarda el respaldo de VARIOS clientes de una sola vez (una sola lectura y
+// una sola escritura), en vez de llamar guardarClienteCache() por cada uno.
+// Ese patrón —leer todo el bloque, modificar un cliente, reescribir todo el
+// bloque— es seguro para UN cliente a la vez, pero si se dispara para 80-130
+// clientes en paralelo (como al precargar toda la ruta del día), cada
+// llamada lee el bloque "antes" de que las demás terminen de escribir, así
+// que unas pisan el resultado de otras y de paso se satura el
+// almacenamiento del teléfono. Aquí se hace UNA sola vez para todos.
+// No pisa el respaldo de un cliente que ya tenía uno guardado.
+export const guardarClientesCacheBatch = async (entradas) => {
+  if (!entradas || entradas.length === 0) return;
+  const raw = await AsyncStorage.getItem(KEYS.clientes);
+  const cache = raw ? JSON.parse(raw) : {};
+  let huboCambios = false;
+  for (const { clienteId, data } of entradas) {
+    if (cache[clienteId]) continue;
+    cache[clienteId] = { data, savedAt: Date.now() };
+    huboCambios = true;
+  }
+  if (huboCambios) {
+    await AsyncStorage.setItem(KEYS.clientes, JSON.stringify(cache));
+  }
 };
 
 // ─── PAGOS PENDIENTES ────────────────────────────────────────────────────────
@@ -89,6 +132,13 @@ export const encolarPago = async ({ id, clienteId, clienteNombre, ventaId, venta
   };
   cola.push(item);
   await AsyncStorage.setItem(KEYS.pagos, JSON.stringify(cola));
+  // Bitácora aparte, fuera del almacenamiento privado de la app — sobrevive
+  // aunque se desinstale antes de que este cobro llegue al servidor.
+  backupOffline.registrarPendiente({
+    label: `Cobro ${clienteNombre} — ${numeroRecibo || id}`,
+    url: `/cobros/clientes/${clienteId}/pagar`,
+    data: { clienteId, clienteNombre, ventaId, ventaNumero, numeroRecibo, monto, metodo, referencia, notas },
+  }).catch(() => {});
   return item;
 };
 
@@ -122,6 +172,7 @@ export const guardarEnHistorial = async ({
   ventaNumero, numeroRecibo, producto = null, monto, metodo, resultado,
   tipo = 'pago', resultadoVisita = null, observaciones = null,
   proximaVisitaFecha = null, pagoOfflineId = null,
+  saldoAntes = null, saldoDespues = null,
 }) => {
   const raw = await AsyncStorage.getItem(KEYS.historial);
   const historial = raw ? JSON.parse(raw) : [];
@@ -136,6 +187,8 @@ export const guardarEnHistorial = async ({
     numeroRecibo,
     producto,
     monto,
+    saldoAntes,
+    saldoDespues,
     metodo,
     resultadoVisita,
     observaciones,
@@ -282,6 +335,10 @@ const _sincronizarPagosPendientesInterno = async (api) => {
       // (no crear uno nuevo — ya fue guardado cuando se registró offline)
       await actualizarHistorialOffline(pago.id, data);
       await eliminarPago(pago.id);
+      backupOffline.registrarSincronizado({
+        label: `Cobro ${pago.clienteNombre} — ${pago.numeroRecibo || pago.id}`,
+        url: `/cobros/clientes/${pago.clienteId}/pagar`,
+      }).catch(() => {});
       synced++;
       console.log(`✅ Cobro sincronizado: ${pago.clienteNombre} $${pago.monto}`);
     } catch (e) {

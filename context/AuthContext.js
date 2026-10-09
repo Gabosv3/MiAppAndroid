@@ -1,18 +1,29 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import api, { setAuthToken, clearAuthToken } from '../services/api';
+import * as SecureStore from 'expo-secure-store';
+import api, { setAuthToken, clearAuthToken, setSesionExpiradaListener } from '../services/api';
 import { startHeartbeat, stopHeartbeat } from '../services/posHeartbeat';
 import { verificarActualizacion } from '../services/updateChecker';
 import { limpiarCacheOffline } from '../services/cobrosOffline';
+import { clearOfflineData } from '../services/localDb';
 import { clearQueue } from '../services/offlineQueue';
 import { registrarPushToken, eliminarPushToken } from '../services/pushNotifications';
 import { removePin } from '../services/appLock';
+import { asegurarConfiguradoTrasLogin } from '../services/backupOffline';
 
 const AuthContext = createContext();
-const STORAGE_KEY_AUTH = '@miapp/auth';
+// El objeto de usuario (nombre, permisos, perfil) no es sensible por sí solo
+// — sin el token no sirve para nada — así que puede vivir en AsyncStorage.
+const STORAGE_KEY_USER = '@miapp/auth_user';
+// El token da acceso completo a la API como ese usuario, y el hash de la
+// contraseña permite el login offline — ambos van cifrados en el
+// keystore/keychain del dispositivo (SecureStore), igual que el PIN, en vez
+// de en AsyncStorage sin cifrar como estaban antes.
+const SECURE_KEY_CREDENCIALES = 'auth_credenciales';
 
 // Hash de doble pasada con salt para verificación offline.
-// No es criptografía fuerte — solo evita guardar la contraseña en texto plano.
+// No es criptografía fuerte — pero ahora vive en SecureStore (cifrado por el
+// SO), ya no en texto plano en AsyncStorage.
 const hashText = (text, salt = '') => {
   const str = String((salt || '') + text);
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
@@ -27,23 +38,42 @@ const hashText = (text, salt = '') => {
 };
 
 const saveAuthData = async ({ user, token, email, password }) => {
-  const payload = {
-    user,
+  const credenciales = {
     token,
     email,
     passwordHash: password ? hashText(password, email) : null,
   };
-  await AsyncStorage.setItem(STORAGE_KEY_AUTH, JSON.stringify(payload));
+  // El objeto "user" en memoria trae el token adentro (comodidad de acceso),
+  // pero si se guarda tal cual en AsyncStorage sin cifrar, el token se
+  // filtra igual por esa puerta — se guarda sin ese campo, ya está a salvo
+  // en SecureStore dentro de "credenciales".
+  const { token: _omitir, ...userSinToken } = user || {};
+  await Promise.all([
+    AsyncStorage.setItem(STORAGE_KEY_USER, JSON.stringify(userSinToken)),
+    SecureStore.setItemAsync(SECURE_KEY_CREDENCIALES, JSON.stringify(credenciales)),
+  ]);
 };
 
 const loadAuthData = async () => {
-  const raw = await AsyncStorage.getItem(STORAGE_KEY_AUTH);
-  if (!raw) return null;
+  const [userRaw, credencialesRaw] = await Promise.all([
+    AsyncStorage.getItem(STORAGE_KEY_USER),
+    SecureStore.getItemAsync(SECURE_KEY_CREDENCIALES),
+  ]);
+  if (!credencialesRaw) return null;
   try {
-    return JSON.parse(raw);
+    const credenciales = JSON.parse(credencialesRaw);
+    const user = userRaw ? JSON.parse(userRaw) : null;
+    return { ...credenciales, user };
   } catch {
     return null;
   }
+};
+
+const removeAuthData = async () => {
+  await Promise.all([
+    AsyncStorage.removeItem(STORAGE_KEY_USER),
+    SecureStore.deleteItemAsync(SECURE_KEY_CREDENCIALES),
+  ]);
 };
 
 export function AuthProvider({ children }) {
@@ -51,6 +81,22 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState(null);
   const [initialized, setInitialized] = useState(false);
+
+  useEffect(() => {
+    // Token vencido o revocado a media sesión (ya no ocurre solo al abrir la
+    // app): se limpia la sesión para que vuelva a la pantalla de login. A
+    // diferencia de logout(), NO se borra la cola offline ni el caché ni el
+    // PIN — es la MISMA persona, solo necesita volver a autenticarse; borrar
+    // eso perdería ventas/cobros pendientes de envío sin motivo.
+    setSesionExpiradaListener(() => {
+      stopHeartbeat();
+      clearAuthToken();
+      setUser(null);
+      setError('Tu sesión expiró. Inicia sesión de nuevo.');
+      removeAuthData().catch(() => {});
+    });
+    return () => setSesionExpiradaListener(null);
+  }, []);
 
   useEffect(() => {
     const restoreAuth = async () => {
@@ -65,7 +111,7 @@ export function AuthProvider({ children }) {
           registrarPushToken();
         } catch {
           clearAuthToken();
-          await AsyncStorage.removeItem(STORAGE_KEY_AUTH);
+          await removeAuthData();
           setUser(null);
         }
       }
@@ -86,8 +132,10 @@ export function AuthProvider({ children }) {
       setAuthToken(stored.token);
     }
     if (stored.user) {
-      setUser(stored.user);
-      return stored.user;
+      const userData = { ...stored.user, token: stored.token };
+      setUser(userData);
+      asegurarConfiguradoTrasLogin(); // no-await: no debe retrasar el login
+      return userData;
     }
     throw new Error('No hay datos de usuario disponibles en el modo offline');
   };
@@ -118,6 +166,7 @@ export function AuthProvider({ children }) {
       startHeartbeat();
       verificarActualizacion(); // no-await: corre en segundo plano sin bloquear login
       registrarPushToken(); // no-await: idem
+      asegurarConfiguradoTrasLogin(); // no-await: idem
       console.log('✅ Login successful');
     } catch (e) {
       console.log('=== LOGIN ERROR ===');
@@ -171,9 +220,14 @@ export function AuthProvider({ children }) {
     // El PIN también es por sesión, no por dispositivo: si no se borra, el
     // siguiente cobrador que inicie sesión en este mismo teléfono queda
     // atrapado detrás del PIN de otra persona.
+    // clearOfflineData() (localDb.js) es una caché SEPARADA de clientes/productos
+    // (SQLite + su respaldo en AsyncStorage, usada para buscar clientes/productos
+    // sin conexión) — antes NO se borraba aquí, así que si se corrompía, ni cerrar
+    // sesión ni volver a entrar la arreglaba; solo desinstalar la app la limpiaba.
     await Promise.all([
-      AsyncStorage.removeItem(STORAGE_KEY_AUTH),
+      removeAuthData(),
       limpiarCacheOffline(),
+      clearOfflineData(),
       clearQueue(),
       removePin(),
     ]);

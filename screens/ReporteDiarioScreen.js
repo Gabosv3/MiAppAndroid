@@ -7,11 +7,12 @@ import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import api from '../services/api';
+import api, { TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import { useAuth } from '../context/AuthContext';
-import { leerRutaCache, leerHistorial } from '../services/cobrosOffline';
+import { leerRutaCache, leerHistorial, leerPagosPendientes } from '../services/cobrosOffline';
 import { fechaHoyLocal, fechaLocalDesdeISO, fmtFechaCorta } from '../services/dateUtils';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 const DUI_STORAGE_KEY = 'COBRADOR_DUI_GUARDADO';
@@ -21,6 +22,7 @@ const PAGO_INDIRECTO = new Set(['abono_previo']); // ya abonó por otra vía —
 const SIN_SALDO = new Set(['sin_saldo']); // cuenta vinculada que ya estaba en $0 — no es "pagó" ni "no pagó"
 
 export default function ReporteDiarioScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const { isOnline } = useConnectivity();
   const { user } = useAuth();
   const nombreCobrador = user?.name || user?.full_name || user?.nombre || user?.usuario || 'Cobrador';
@@ -36,6 +38,7 @@ export default function ReporteDiarioScreen({ navigation }) {
   const [aRecoger, setARecoger] = useState('0');
   const [totalCobrado, setTotalCobrado] = useState(0);
   const [generando, setGenerando] = useState(false);
+  const [pagosPend, setPagosPend] = useState([]);
 
   useFocusEffect(useCallback(() => {
     (async () => {
@@ -55,7 +58,7 @@ export default function ReporteDiarioScreen({ navigation }) {
       let items = [];
       if (isOnline) {
         try {
-          const { data } = await api.get('/cobros/historial');
+          const { data } = await api.get('/cobros/historial', { timeout: TIMEOUT_LECTURA_CACHE });
           items = (data.items || []).map(it => ({
             tipo: it.tipo,
             clienteId: it.cliente?.id,
@@ -88,6 +91,9 @@ export default function ReporteDiarioScreen({ navigation }) {
       setSinSaldo(idsSinSaldo.size);
       setTotalCobrado(items.filter(i => i.tipo === 'pago').reduce((s, i) => s + Number(i.monto || 0), 0));
 
+      const pend = await leerPagosPendientes();
+      setPagosPend(pend);
+
       setCargando(false);
     })();
   }, [isOnline]));
@@ -106,6 +112,26 @@ export default function ReporteDiarioScreen({ navigation }) {
       Alert.alert('Falta la ruta', 'No se detectó la ruta visitada hoy. Verifica que tengas la ruta cargada.');
       return;
     }
+    // No se bloquea del todo (podría quedar sin señal en zona sin cobertura
+    // y no poder cerrar el día nunca) — pero no puede pasar de largo sin
+    // verlo: tiene que confirmar a propósito que va a entregar ese efectivo
+    // aparte, en vez de que quede silenciosamente fuera del total.
+    if (pagosPend.length > 0) {
+      const totalPend = pagosPend.reduce((s, p) => s + Number(p.monto || 0), 0);
+      Alert.alert(
+        '⚠️ Tienes cobros sin enviar al servidor',
+        `Este teléfono tiene ${pagosPend.length} cobro${pagosPend.length !== 1 ? 's' : ''} por ${fmt(totalPend)} que NO se han enviado — ese dinero NO está sumado en "Total cobrado" de este reporte.\n\n¿Ya lo tienes en cuenta para entregarlo aparte?`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Sí, continuar de todos modos', style: 'destructive', onPress: () => generarReporteConfirmado() },
+        ]
+      );
+      return;
+    }
+    await generarReporteConfirmado();
+  };
+
+  const generarReporteConfirmado = async () => {
     setGenerando(true);
     try {
       const fecha = fmtFechaCorta(new Date());
@@ -199,7 +225,7 @@ export default function ReporteDiarioScreen({ navigation }) {
   return (
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Text style={s.backArrow}>←</Text>
         </TouchableOpacity>
@@ -207,6 +233,13 @@ export default function ReporteDiarioScreen({ navigation }) {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+        {pagosPend.length > 0 && (
+          <View style={s.pendBanner}>
+            <Text style={s.pendTxt}>
+              ⚠️ {pagosPend.length} cobro{pagosPend.length !== 1 ? 's' : ''} por {fmt(pagosPend.reduce((s, p) => s + Number(p.monto || 0), 0))} sin enviar al servidor — no están sumados en "Total cobrado" abajo. Conéctate a internet antes de cerrar, o súmalo aparte al entregar el efectivo.
+            </Text>
+          </View>
+        )}
         <View style={s.card}>
           <Text style={s.cardTitle}>Tu DUI</Text>
           <TextInput
@@ -256,11 +289,15 @@ const s = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
   header: {
     backgroundColor: '#1565C0', flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingTop: (StatusBar.currentHeight || 0) + 8, paddingBottom: 16, paddingHorizontal: 16,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom: 16, paddingHorizontal: 16,
   },
   backBtn: {},
   backArrow: { color: '#fff', fontSize: 24 },
   headerTitle: { color: '#fff', fontSize: 18, fontWeight: '800' },
+
+  pendBanner: { backgroundColor: '#fee2e2', borderWidth: 1, borderColor: '#fca5a5', borderRadius: 10, padding: 12, marginBottom: 12 },
+  pendTxt:    { color: '#991b1b', fontSize: 12, fontWeight: '600', lineHeight: 17 },
 
   card: { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 12, elevation: 2 },
   cardTitle: { fontSize: 14, fontWeight: '800', color: '#1a1a1a', marginBottom: 10 },

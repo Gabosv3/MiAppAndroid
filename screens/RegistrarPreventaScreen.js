@@ -3,15 +3,17 @@ import {
   View, Text, TouchableOpacity, StyleSheet, StatusBar,
   ScrollView, TextInput, ActivityIndicator, Alert, Modal, FlatList,
 } from 'react-native';
-import api, { esErrorTransitorio } from '../services/api';
+import api, { esErrorTransitorio, TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
 import * as localDb from '../services/localDb';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 const initials = (name = '') => name.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() || '').join('');
 
 export default function RegistrarPreventaScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const { isOnline } = useConnectivity();
 
   const [cliente, setCliente] = useState(null);
@@ -19,6 +21,11 @@ export default function RegistrarPreventaScreen({ navigation }) {
   const [busquedaCliente, setBusquedaCliente] = useState('');
   const [clientes, setClientes] = useState([]);
   const [buscandoCliente, setBuscandoCliente] = useState(false);
+
+  // No quiere que lo registren — solo nombre y teléfono, sin crear cliente.
+  const [noQuiereRegistrarse, setNoQuiereRegistrarse] = useState(false);
+  const [nombreNoRegistrado, setNombreNoRegistrado] = useState('');
+  const [telefonoNoRegistrado, setTelefonoNoRegistrado] = useState('');
 
   const [carrito, setCarrito] = useState([]); // [{ id, nombre, codigo, precio_venta, cantidad }]
   const [showProductoModal, setShowProductoModal] = useState(false);
@@ -30,12 +37,22 @@ export default function RegistrarPreventaScreen({ navigation }) {
   const [submitting, setSubmitting] = useState(false);
   const debounceRef = useRef(null);
 
+  // Igual que en Nueva Venta: si este dispositivo/usuario nunca ha tenido
+  // clientes guardados localmente, el respaldo al que cae el catch de abajo
+  // está vacío — fallar rápido a los 8s solo deja la lista vacía sin
+  // ningún aviso. Se revisa una sola vez si hay algo útil en la caché.
+  const hayCacheLocalClientes = useRef(null);
   const buscarClientes = useCallback(async (q) => {
     setBuscandoCliente(true);
     try {
+      if (hayCacheLocalClientes.current === null) {
+        const locales = await localDb.getLocalClients().catch(() => []);
+        hayCacheLocalClientes.current = Array.isArray(locales) && locales.length > 0;
+      }
       let qs = 'per_page=30';
       if (q) qs += `&q=${encodeURIComponent(q)}`;
-      const { data } = await api.get(`/clientes?${qs}`);
+      const timeoutConfig = hayCacheLocalClientes.current ? { timeout: TIMEOUT_LECTURA_CACHE } : undefined;
+      const { data } = await api.get(`/clientes?${qs}`, timeoutConfig);
       setClientes(Array.isArray(data) ? data : (data.data || []));
     } catch (e) {
       if (esErrorTransitorio(e)) {
@@ -56,9 +73,13 @@ export default function RegistrarPreventaScreen({ navigation }) {
   const buscarProductos = useCallback(async (q) => {
     setBuscandoProducto(true);
     try {
-      let qs = 'per_page=30';
+      // preventa=1: catálogo completo de origen manual, sin restringir a la
+      // asignación diaria ni al stock — en preventa se está registrando el
+      // interés del cliente para encargar el producto, no despachándolo
+      // ahora mismo.
+      let qs = 'per_page=30&preventa=1';
       if (q) qs += `&q=${encodeURIComponent(q)}`;
-      const { data } = await api.get(`/productos?${qs}`);
+      const { data } = await api.get(`/productos?${qs}`, { timeout: TIMEOUT_LECTURA_CACHE });
       const lista = Array.isArray(data) ? data : (data.data || []);
       setProductos(lista);
     } catch (e) {
@@ -96,8 +117,13 @@ export default function RegistrarPreventaScreen({ navigation }) {
   const totalEstimado = carrito.reduce((s, i) => s + Number(i.precio_venta || 0) * i.cantidad, 0);
 
   const enviar = async () => {
-    if (!cliente) {
-      Alert.alert('Falta el cliente', 'Selecciona el cliente interesado en comprar.');
+    if (noQuiereRegistrarse) {
+      if (!nombreNoRegistrado.trim()) {
+        Alert.alert('Falta el nombre', 'Escribe el nombre completo de la persona interesada.');
+        return;
+      }
+    } else if (!cliente) {
+      Alert.alert('Falta el cliente', 'Selecciona el cliente interesado en comprar, o marca "No quiere que lo registren".');
       return;
     }
     if (carrito.length === 0) {
@@ -105,8 +131,19 @@ export default function RegistrarPreventaScreen({ navigation }) {
       return;
     }
     setSubmitting(true);
+    // Generada una vez, antes del primer intento, y reutilizada si la
+    // preventa termina encolada offline — evita que un reintento tras
+    // timeout cree una preventa duplicada.
+    const idempotencyKey = `preventa-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const nombreParaLabel = noQuiereRegistrarse ? nombreNoRegistrado.trim() : cliente.nombre;
     const payload = {
-      cliente_id: cliente.id,
+      idempotency_key: idempotencyKey,
+      ...(noQuiereRegistrarse
+        ? {
+            nombre_no_registrado: nombreNoRegistrado.trim(),
+            ...(telefonoNoRegistrado.trim() && { telefono_no_registrado: telefonoNoRegistrado.trim() }),
+          }
+        : { cliente_id: cliente.id }),
       ...(observaciones.trim() && { observaciones: observaciones.trim() }),
       detalles: carrito.map(i => ({ producto_id: i.id, cantidad: i.cantidad })),
     };
@@ -115,7 +152,7 @@ export default function RegistrarPreventaScreen({ navigation }) {
       await offlineQueue.enqueueRequest({
         method: 'POST',
         url: '/preventas',
-        label: `Preventa ${cliente.nombre}`,
+        label: `Preventa ${nombreParaLabel}`,
         data: payload,
       });
       Alert.alert(
@@ -149,7 +186,7 @@ export default function RegistrarPreventaScreen({ navigation }) {
   return (
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Text style={s.backArrow}>←</Text>
         </TouchableOpacity>
@@ -165,22 +202,58 @@ export default function RegistrarPreventaScreen({ navigation }) {
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
         <View style={s.card}>
           <Text style={s.cardTitle}>Cliente interesado</Text>
-          {cliente ? (
-            <TouchableOpacity style={s.clienteSel} onPress={() => setShowClienteModal(true)}>
-              <View style={[s.avatar, { backgroundColor: '#1565C0' }]}>
-                <Text style={s.avatarTxt}>{initials(cliente.nombre)}</Text>
-              </View>
-              <View style={{ flex: 1, marginLeft: 10 }}>
-                <Text style={s.clienteNombre}>{cliente.nombre}</Text>
-                {cliente.codigo_anterior ? <Text style={s.clienteSub}>Código: {cliente.codigo_anterior}</Text> : null}
-              </View>
-              <Text style={{ color: '#1565C0', fontWeight: '700', fontSize: 12 }}>Cambiar</Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity style={s.selectBtn} onPress={() => setShowClienteModal(true)}>
-              <Text style={{ fontSize: 18, marginRight: 10 }}>👤</Text>
-              <Text style={s.selectBtnTxt}>Buscar cliente...</Text>
-            </TouchableOpacity>
+
+          {!noQuiereRegistrarse && (
+            cliente ? (
+              <TouchableOpacity style={s.clienteSel} onPress={() => setShowClienteModal(true)}>
+                <View style={[s.avatar, { backgroundColor: '#1565C0' }]}>
+                  <Text style={s.avatarTxt}>{initials(cliente.nombre)}</Text>
+                </View>
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={s.clienteNombre}>{cliente.nombre}</Text>
+                  {cliente.codigo_anterior ? <Text style={s.clienteSub}>Código: {cliente.codigo_anterior}</Text> : null}
+                </View>
+                <Text style={{ color: '#1565C0', fontWeight: '700', fontSize: 12 }}>Cambiar</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={s.selectBtn} onPress={() => setShowClienteModal(true)}>
+                <Text style={{ fontSize: 18, marginRight: 10 }}>👤</Text>
+                <Text style={s.selectBtnTxt}>Buscar cliente...</Text>
+              </TouchableOpacity>
+            )
+          )}
+
+          <TouchableOpacity
+            style={s.checkRow}
+            onPress={() => {
+              setNoQuiereRegistrarse(v => !v);
+              setCliente(null);
+            }}
+          >
+            <View style={[s.checkbox, noQuiereRegistrarse && s.checkboxOn]}>
+              {noQuiereRegistrarse && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '900' }}>✓</Text>}
+            </View>
+            <Text style={s.checkLabel}>No quiere que lo registren — solo tomar nombre y teléfono</Text>
+          </TouchableOpacity>
+
+          {noQuiereRegistrarse && (
+            <View style={{ marginTop: 10 }}>
+              <TextInput
+                style={s.input}
+                value={nombreNoRegistrado}
+                onChangeText={setNombreNoRegistrado}
+                placeholder="Nombre completo *"
+                placeholderTextColor="#bbb"
+              />
+              <TextInput
+                style={s.input}
+                value={telefonoNoRegistrado}
+                onChangeText={setTelefonoNoRegistrado}
+                placeholder="Teléfono (opcional)"
+                placeholderTextColor="#bbb"
+                keyboardType="phone-pad"
+              />
+            </View>
           )}
         </View>
 
@@ -329,7 +402,8 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#f5f6fa' },
   header: {
     backgroundColor: '#1565C0', flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingTop: (StatusBar.currentHeight || 0) + 8, paddingBottom: 16, paddingHorizontal: 16,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom: 16, paddingHorizontal: 16,
   },
   backBtn: {},
   backArrow: { color: '#fff', fontSize: 24 },
@@ -343,6 +417,11 @@ const s = StyleSheet.create({
 
   selectBtn: { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: '#e0e0e0', borderRadius: 10, padding: 14, marginTop: 10, borderStyle: 'dashed' },
   selectBtnTxt: { color: '#888', fontSize: 14 },
+
+  checkRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
+  checkbox: { width: 20, height: 20, borderRadius: 4, borderWidth: 1.5, borderColor: '#bbb', alignItems: 'center', justifyContent: 'center', marginRight: 8 },
+  checkboxOn: { backgroundColor: '#1565C0', borderColor: '#1565C0' },
+  checkLabel: { flex: 1, color: '#555', fontSize: 13 },
 
   clienteSel: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
   avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },

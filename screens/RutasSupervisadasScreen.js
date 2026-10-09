@@ -1,10 +1,12 @@
 import React, { useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, StatusBar, FlatList, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import api from '../services/api';
+import api, { TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function RutasSupervisadasScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const { isOnline } = useConnectivity();
   const [rutas, setRutas] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -19,7 +21,7 @@ export default function RutasSupervisadasScreen({ navigation }) {
     setLoading(true);
     setError('');
     try {
-      const { data } = await api.get('/cobros/supervisor/rutas');
+      const { data } = await api.get('/cobros/supervisor/rutas', { timeout: TIMEOUT_LECTURA_CACHE });
       setRutas(data.rutas || []);
     } catch (e) {
       setError(e?.response?.data?.mensaje || 'No se pudieron cargar tus rutas supervisadas.');
@@ -65,7 +67,7 @@ export default function RutasSupervisadasScreen({ navigation }) {
   return (
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Text style={s.backArrow}>←</Text>
         </TouchableOpacity>
@@ -104,7 +106,8 @@ const s = StyleSheet.create({
   errorTxt: { color: '#888', textAlign: 'center', fontSize: 13 },
   header: {
     backgroundColor: '#1565C0', flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingTop: (StatusBar.currentHeight || 0) + 8, paddingBottom: 16, paddingHorizontal: 16,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom: 16, paddingHorizontal: 16,
   },
   backBtn: {},
   backArrow: { color: '#fff', fontSize: 24 },

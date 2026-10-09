@@ -6,6 +6,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { WebView } from 'react-native-webview';
 import { leerHistorial } from '../services/cobrosOffline';
 import { fechaHoyLocal, fechaLocalDesdeISO } from '../services/dateUtils';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const markerColor = (vencidas) => {
   if (vencidas >= 6) return '#e53e3e';   // rojo
@@ -148,6 +149,7 @@ const buildMapHtml = (clientes, region) => {
 };
 
 export default function MapaCobrosScreen({ navigation, route }) {
+  const insets = useSafeAreaInsets();
   const { clientes = [] } = route.params;
   const webRef = useRef(null);
   const [seleccionado, setSeleccionado] = useState(null);
@@ -214,7 +216,7 @@ export default function MapaCobrosScreen({ navigation, route }) {
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" translucent />
 
       {/* Header */}
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} hitSlop={{top:10,bottom:10,left:10,right:10}}>
           <Text style={s.backArrow}>←</Text>
         </TouchableOpacity>
@@ -344,7 +346,8 @@ const s = StyleSheet.create({
   root:   { flex:1, backgroundColor:'#fff' },
   header: {
     backgroundColor:'#1565C0', flexDirection:'row', alignItems:'center',
-    paddingTop:(StatusBar.currentHeight||0)+8, paddingBottom:14, paddingHorizontal:16,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom:14, paddingHorizontal:16,
     zIndex:10,
   },
   backBtn:     { marginRight:12 },

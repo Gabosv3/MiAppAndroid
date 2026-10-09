@@ -21,15 +21,12 @@ const DRAWER_WIDTH = Math.min(320, SCREEN_WIDTH * 0.85);
 
 const NAV_ITEMS = [
   { name: 'Inicio', icon: '🏠', active: true },
-  { name: 'Inventario', icon: '📦', disabled: true },
-  { name: 'Productos', icon: '🏷️', disabled: true },
-  { name: 'Movimientos', icon: '🔄', disabled: true },
-  { name: 'Reportes', icon: '📊', disabled: true },
 ];
 
 export default function CustomDrawer({ visible, onClose, navigation }) {
   const { colors, mode, toggleTheme } = useTheme();
   const { user, logout } = useAuth();
+  const esSuperAdmin = !!user?.perfil?.es_super_admin;
   const { isOnline } = useConnectivity();
   const translateX = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
@@ -112,6 +109,50 @@ export default function CustomDrawer({ visible, onClose, navigation }) {
               {item.disabled && <Text style={s.badgeLabel}>Próximo</Text>}
             </TouchableOpacity>
           ))}
+
+          {esSuperAdmin && (
+            <>
+              <Text style={[s.navSection, { marginTop: 18 }]}>ADMINISTRACIÓN</Text>
+              <TouchableOpacity
+                style={s.navItem}
+                onPress={() => {
+                  onClose();
+                  setTimeout(() => navigation?.navigate('AdminKPIs'), 300);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={s.navItemIcon}>📈</Text>
+                <Text style={s.navItemText}>KPIs del negocio</Text>
+                <Text style={s.superBadge}>SUPER</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={s.navItem}
+                onPress={() => {
+                  onClose();
+                  setTimeout(() => navigation?.navigate('AdminResumenes'), 300);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={s.navItemIcon}>📅</Text>
+                <Text style={s.navItemText}>Resúmenes del día</Text>
+                <Text style={s.superBadge}>SUPER</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={s.navItem}
+                onPress={() => {
+                  onClose();
+                  setTimeout(() => navigation?.navigate('AdminAsignaciones'), 300);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={s.navItemIcon}>📦</Text>
+                <Text style={s.navItemText}>Asignaciones Diarias</Text>
+                <Text style={s.superBadge}>SUPER</Text>
+              </TouchableOpacity>
+            </>
+          )}
         </ScrollView>
 
         {/* Footer */}
@@ -130,7 +171,7 @@ export default function CustomDrawer({ visible, onClose, navigation }) {
 
           <TouchableOpacity style={s.pinButton} onPress={handleCambiarPin} activeOpacity={0.7}>
             <Text style={s.pinIcon}>🔒</Text>
-            <Text style={s.pinLabel}>Cambiar PIN</Text>
+            <Text style={s.pinLabel}>Seguridad / PIN</Text>
           </TouchableOpacity>
 
           <View style={s.footerDivider} />
@@ -241,6 +282,16 @@ const styles = (c) => StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 8,
+  },
+  superBadge: {
+    color: '#5E35B1',
+    fontSize: 9,
+    fontWeight: '800',
+    backgroundColor: '#5E35B120',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    letterSpacing: 0.5,
   },
 
   // ── FOOTER ──────────────────────────────────────────────────────────────

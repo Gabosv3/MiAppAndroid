@@ -10,6 +10,7 @@ import * as offlineQueue from '../services/offlineQueue';
 import CustomDrawer from '../navigation/CustomDrawerContent';
 import Constants from 'expo-constants';
 import { verificarActualizacion, versionActual } from '../services/updateChecker';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const DIAS = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
 const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
@@ -27,6 +28,7 @@ export default function HomeScreen({ navigation }) {
   const [buscandoUpdate, setBuscandoUpdate] = useState(false);
   const [descargandoPct, setDescargandoPct] = useState(null); // null = no descargando, 0-100 = progreso
   const syncing = useRef(false);
+  const insets = useSafeAreaInsets();
 
   // Auto-sync silencioso: cada vez que vuelve la conexión, envía la cola pendiente
   useEffect(() => {
@@ -43,12 +45,66 @@ export default function HomeScreen({ navigation }) {
 
   const s = styles(colors);
 
+  const esVendedor = !!user?.perfil?.es_vendedor;
+  const esCobrador = !!user?.perfil?.es_cobrador;
+  const esSupervisor = !!user?.perfil?.es_supervisor;
+
+  // Módulos principales: el rol del usuario decide cuál va primero.
+  const modVenta = { key: 'venta', screen: 'NuevaVenta', color: '#F5A623', icon: '🛒', label: 'Nueva Venta', desc: 'Punto de venta · Registro de ventas' };
+  const modCobros = { key: 'cobros', screen: 'Cobros', color: '#1565C0', icon: '💰', label: 'Cobros del día', desc: 'Rutas · Registrar pagos' };
+  const modReintegros = { key: 'reintegros', screen: 'Reintegros', color: '#B71C1C', icon: '📦', label: 'Reintegros', desc: 'Recuperación de productos' };
+  const modSupervision = { key: 'supervision', screen: 'RutasSupervisadas', color: '#5E35B1', icon: '🕵️', label: 'Rutas que superviso', desc: 'Historial, evaluación y desempeño' };
+
+  const modulosPrincipales = [];
+  if (esSupervisor) modulosPrincipales.push(modSupervision);
+  if (esCobrador) modulosPrincipales.push(modCobros);
+  if (esVendedor) modulosPrincipales.push(modVenta);
+  if (!esVendedor) modulosPrincipales.push(modVenta);
+  if (!esCobrador) modulosPrincipales.push(modCobros);
+  modulosPrincipales.push(modReintegros);
+  // Quita duplicados manteniendo el primer orden (rol primero).
+  const vistos = new Set();
+  const modulosOrdenados = modulosPrincipales.filter((m) => (vistos.has(m.key) ? false : (vistos.add(m.key), true)));
+
+  const gruposAccesos = [
+    esSupervisor && {
+      titulo: '🕵️ Supervisión',
+      items: [
+        { key: 'desempeno-cobradores', screen: 'DesempenoCobradores', icon: '👥', tint: '#5E35B112', label: 'Desempeño cobradores', desc: 'Ruta bajo mi cargo' },
+      ],
+    },
+    {
+      titulo: '👤 Clientes',
+      items: [
+        { key: 'crear-cliente', screen: 'CrearCliente', icon: '👤', tint: '#F5A62312', label: 'Crear cliente', desc: 'Registrar nuevo' },
+        { key: 'mapa-ruta', screen: 'Cobros', icon: '🗺️', tint: '#1565C012', label: 'Mapa de ruta', desc: 'Ver clientes' },
+        { key: 'directorio', screen: 'DirectorioClientes', icon: '📖', tint: '#00897B12', label: 'Enciclopedia', desc: 'Directorio de clientes' },
+        { key: 'preventas', screen: 'MisPreventas', icon: '📝', tint: '#F5A62312', label: 'Preventas', desc: 'Registrar interés de compra' },
+      ],
+    },
+    {
+      titulo: '📊 Mi trabajo',
+      items: [
+        { key: 'mi-desempeno', screen: 'MiDesempeno', icon: '📈', tint: '#1565C012', label: 'Mi desempeño', desc: 'Cobrado, mora y ruta de hoy' },
+        { key: 'reporte-diario', screen: 'ReporteDiario', icon: '📄', tint: '#00897B12', label: 'Reporte diario', desc: 'Carta formal de cierre' },
+        { key: 'mis-vales', screen: 'MisVales', icon: '📋', tint: '#B71C1C12', label: 'Mis vales', desc: 'Ver estado' },
+        { key: 'registrar-gasto', screen: 'RegistrarGasto', icon: '🧾', tint: '#B71C1C12', label: 'Registrar gasto', desc: 'Vale de consumo/vehículo' },
+      ],
+    },
+    {
+      titulo: '🤖 Soporte',
+      items: [
+        { key: 'ayuda', screen: 'Ayuda', icon: '🤖', tint: '#5E35B112', label: 'Ayuda', desc: 'Guía paso a paso, sin conexión' },
+      ],
+    },
+  ].filter(Boolean);
+
   return (
     <View style={s.root}>
       <StatusBar barStyle={colors.statusBar} backgroundColor={colors.headerBg} />
 
       {/* App Bar */}
-      <View style={s.appBar}>
+      <View style={[s.appBar, { paddingTop: insets.top + 10 }]}>
         <TouchableOpacity
           onPress={() => setDrawerOpen(true)}
           style={s.menuBtn}
@@ -112,7 +168,9 @@ export default function HomeScreen({ navigation }) {
 
           {/* Versión y botón de actualización */}
           <View style={s.versionRow}>
-            <Text style={s.versionTxt}>v{versionActual()} (build {Constants.expoConfig?.android?.versionCode ?? '?'})</Text>
+            <TouchableOpacity onPress={() => navigation.navigate('Diagnostico')} hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}>
+              <Text style={s.versionTxt}>v{versionActual()} (build {Constants.expoConfig?.android?.versionCode ?? '?'}) · 🔧</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={[s.updateBtn, buscandoUpdate && s.updateBtnDisabled]}
               disabled={buscandoUpdate}
@@ -131,158 +189,49 @@ export default function HomeScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Módulos principales */}
-        <Text style={s.sectionTitle}>Módulos</Text>
+        {/* Módulos principales — orden priorizado según el rol del usuario */}
+        <Text style={s.sectionTitle}>Módulos principales</Text>
 
-        <TouchableOpacity
-          style={[s.mainBtn, { backgroundColor: '#F5A623' }]}
-          onPress={() => navigation.navigate('NuevaVenta')}
-          activeOpacity={0.85}
-        >
-          <Text style={s.mainBtnIcon}>🛒</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={s.mainBtnLabel}>Nueva Venta</Text>
-            <Text style={s.mainBtnDesc}>Punto de venta · Registro de ventas</Text>
-          </View>
-          <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700' }}>→</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[s.mainBtn, { backgroundColor: '#1565C0', marginTop: 10 }]}
-          onPress={() => navigation.navigate('Cobros')}
-          activeOpacity={0.85}
-        >
-          <Text style={s.mainBtnIcon}>💰</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={s.mainBtnLabel}>Cobros del día</Text>
-            <Text style={s.mainBtnDesc}>Rutas · Registrar pagos</Text>
-          </View>
-          <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700' }}>→</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[s.mainBtn, { backgroundColor: '#B71C1C', marginTop: 10 }]}
-          onPress={() => navigation.navigate('Reintegros')}
-          activeOpacity={0.85}
-        >
-          <Text style={s.mainBtnIcon}>📦</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={s.mainBtnLabel}>Reintegros</Text>
-            <Text style={s.mainBtnDesc}>Recuperación de productos</Text>
-          </View>
-          <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700' }}>→</Text>
-        </TouchableOpacity>
-
-        {user?.perfil?.es_supervisor && (
+        {modulosOrdenados.map((m, i) => (
           <TouchableOpacity
-            style={[s.mainBtn, { backgroundColor: '#5E35B1', marginTop: 10 }]}
-            onPress={() => navigation.navigate('RutasSupervisadas')}
+            key={m.key}
+            style={[s.mainBtn, { backgroundColor: m.color, marginTop: i === 0 ? 0 : 10 }]}
+            onPress={() => navigation.navigate(m.screen)}
             activeOpacity={0.85}
           >
-            <Text style={s.mainBtnIcon}>🕵️</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={s.mainBtnLabel}>Rutas que superviso</Text>
-              <Text style={s.mainBtnDesc}>Historial, evaluación y desempeño</Text>
+            <View style={s.mainBtnIconWrap}>
+              <Text style={s.mainBtnIcon}>{m.icon}</Text>
             </View>
-            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700' }}>→</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={s.mainBtnLabel}>{m.label}</Text>
+              <Text style={s.mainBtnDesc}>{m.desc}</Text>
+            </View>
+            <Text style={s.mainBtnArrow}>→</Text>
           </TouchableOpacity>
-        )}
+        ))}
 
-        {/* Acciones rápidas */}
-        <Text style={[s.sectionTitle, { marginTop: 28 }]}>Acciones rápidas</Text>
-
-        <View style={s.quickGrid}>
-          {user?.perfil?.es_supervisor && (
-            <TouchableOpacity
-              style={s.quickCard}
-              onPress={() => navigation.navigate('DesempenoCobradores')}
-              activeOpacity={0.85}
-            >
-              <Text style={s.quickIcon}>👥</Text>
-              <Text style={s.quickTitle}>Desempeño cobradores</Text>
-              <Text style={s.quickSub}>Ruta bajo mi cargo</Text>
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity
-            style={s.quickCard}
-            onPress={() => navigation.navigate('CrearCliente')}
-            activeOpacity={0.85}
-          >
-            <Text style={s.quickIcon}>👤</Text>
-            <Text style={s.quickTitle}>Crear cliente</Text>
-            <Text style={s.quickSub}>Registrar nuevo</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={s.quickCard}
-            onPress={() => navigation.navigate('Cobros')}
-            activeOpacity={0.85}
-          >
-            <Text style={s.quickIcon}>🗺️</Text>
-            <Text style={s.quickTitle}>Mapa de ruta</Text>
-            <Text style={s.quickSub}>Ver clientes</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={s.quickCard}
-            onPress={() => navigation.navigate('RegistrarGasto')}
-            activeOpacity={0.85}
-          >
-            <Text style={s.quickIcon}>🧾</Text>
-            <Text style={s.quickTitle}>Registrar gasto</Text>
-            <Text style={s.quickSub}>Vale de consumo/vehículo</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={s.quickCard}
-            onPress={() => navigation.navigate('MisVales')}
-            activeOpacity={0.85}
-          >
-            <Text style={s.quickIcon}>📋</Text>
-            <Text style={s.quickTitle}>Mis vales</Text>
-            <Text style={s.quickSub}>Ver estado</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={s.quickCard}
-            onPress={() => navigation.navigate('DirectorioClientes')}
-            activeOpacity={0.85}
-          >
-            <Text style={s.quickIcon}>📖</Text>
-            <Text style={s.quickTitle}>Enciclopedia</Text>
-            <Text style={s.quickSub}>Directorio de clientes</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={s.quickCard}
-            onPress={() => navigation.navigate('ReporteDiario')}
-            activeOpacity={0.85}
-          >
-            <Text style={s.quickIcon}>📄</Text>
-            <Text style={s.quickTitle}>Reporte diario</Text>
-            <Text style={s.quickSub}>Carta formal de cierre</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={s.quickCard}
-            onPress={() => navigation.navigate('MisPreventas')}
-            activeOpacity={0.85}
-          >
-            <Text style={s.quickIcon}>📝</Text>
-            <Text style={s.quickTitle}>Preventas</Text>
-            <Text style={s.quickSub}>Registrar interés de compra</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={s.quickCard}
-            onPress={() => navigation.navigate('MiDesempeno')}
-            activeOpacity={0.85}
-          >
-            <Text style={s.quickIcon}>📈</Text>
-            <Text style={s.quickTitle}>Mi desempeño</Text>
-            <Text style={s.quickSub}>Cobrado, mora y ruta de hoy</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Accesos rápidos, agrupados por tema */}
+        {gruposAccesos.map((grupo) => (
+          <View key={grupo.titulo}>
+            <Text style={[s.sectionTitle, { marginTop: 28 }]}>{grupo.titulo}</Text>
+            <View style={s.quickGrid}>
+              {grupo.items.map((item) => (
+                <TouchableOpacity
+                  key={item.key}
+                  style={s.quickCard}
+                  onPress={() => navigation.navigate(item.screen)}
+                  activeOpacity={0.85}
+                >
+                  <View style={[s.quickIconWrap, { backgroundColor: item.tint }]}>
+                    <Text style={s.quickIcon}>{item.icon}</Text>
+                  </View>
+                  <Text style={s.quickTitle}>{item.label}</Text>
+                  <Text style={s.quickSub}>{item.desc}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        ))}
 
         <View style={{ height: 32 }} />
       </ScrollView>
@@ -302,7 +251,7 @@ const styles = (c) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: StatusBar.currentHeight ? StatusBar.currentHeight + 10 : 50,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
     paddingBottom: 14,
     paddingHorizontal: 16,
     borderBottomWidth: 1,
@@ -373,9 +322,15 @@ const styles = (c) => StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
   },
-  mainBtnIcon:  { fontSize: 34 },
+  mainBtnIconWrap: {
+    width: 48, height: 48, borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  mainBtnIcon:  { fontSize: 26 },
   mainBtnLabel: { color: '#fff', fontSize: 16, fontWeight: '800', marginBottom: 2 },
   mainBtnDesc:  { color: 'rgba(255,255,255,0.75)', fontSize: 12 },
+  mainBtnArrow: { color: '#fff', fontSize: 20, fontWeight: '700' },
 
   quickGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   quickCard: {
@@ -384,13 +339,18 @@ const styles = (c) => StyleSheet.create({
     backgroundColor: c.surface,
     borderRadius: 16,
     padding: 16,
-    minHeight: 110,
+    minHeight: 116,
     justifyContent: 'space-between',
     borderWidth: 1,
     borderColor: c.border,
     elevation: 2,
   },
-  quickIcon:  { fontSize: 28, marginBottom: 6 },
+  quickIconWrap: {
+    width: 38, height: 38, borderRadius: 12,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 8,
+  },
+  quickIcon:  { fontSize: 20 },
   quickTitle: { color: c.text, fontSize: 14, fontWeight: '700', marginBottom: 2 },
   quickSub:   { color: c.textMuted, fontSize: 11 },
 });

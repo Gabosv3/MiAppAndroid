@@ -1,31 +1,40 @@
 import React, { useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView, Linking, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { fmtFechaCorta } from '../services/dateUtils';
+import { enviarReciboPorWhatsApp, htmlPieInformativo, htmlMetodosPago } from '../services/reciboWhatsApp';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const fmt = (n) => `$${Number(n||0).toFixed(2)}`;
 const capitalizar = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 
 // Formato compacto — una línea por dato, separadores finos en vez de cajas
 // con márgenes grandes, para gastar menos papel sin perder legibilidad.
-const buildHtmlRecibo = ({ clienteNombre, codigoCliente, ventaNumero, producto, numeroRecibo, montoTotal, metodoPago, proximaVisita, saldoAntes, saldoDespues, nombreCobrador }) => {
+// pdf=true: mismo contenido pero en una página legible en el teléfono del
+// cliente (el ticket de 220px, tal cual, queda diminuto en una hoja normal)
+// y con la página web al pie. La impresión del ticket no cambia.
+const buildHtmlRecibo = ({ clienteNombre, codigoCliente, ventaNumero, producto, numeroRecibo, montoTotal, metodoPago, proximaVisita, saldoAntes, saldoDespues, nombreCobrador, pdf = false }) => {
   const fecha   = fmtFechaCorta(new Date());
   const proxFmt = proximaVisita ? fmtFechaCorta(proximaVisita) : '';
+  const ancho   = pdf ? 480 : 220;
+  const base    = pdf ? 15 : 11;
+  const grande  = pdf ? 20 : 14;
+  const relleno = pdf ? '28px 8px' : '6px 4px';
   return `<html><head>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <style>
       *{box-sizing:border-box;margin:0;padding:0}
-      body{font-family:Arial,Helvetica,sans-serif;width:220px;margin:0 auto;padding:6px 4px;font-size:11px;line-height:1.5;color:#111}
+      body{font-family:Arial,Helvetica,sans-serif;width:${ancho}px;margin:0 auto;padding:${relleno};font-size:${base}px;line-height:1.5;color:#111}
       .c{text-align:center}
       .b{font-weight:700}
       .row{display:flex;justify-content:space-between;align-items:center}
       .div{border-top:1px solid #999;margin:5px 0}
-      .tot{font-size:14px}
+      .tot{font-size:${grande}px}
     </style>
   </head><body>
-    <div class="c b" style="font-size:14px">DISTRIBUIDORA BM</div>
+    <div class="c b" style="font-size:${grande}px">DISTRIBUIDORA BM</div>
     <div class="c">6047-9762</div>
     <div style="height:8px"></div>
     <div class="row"><span class="b">${numeroRecibo||'N/A'}</span><span>${fecha}</span></div>
@@ -42,6 +51,7 @@ const buildHtmlRecibo = ({ clienteNombre, codigoCliente, ventaNumero, producto, 
     <div class="div"></div>
     ${proxFmt ? `<div class="row"><span>Próx. visita:</span><span>${proxFmt}</span></div><div class="div"></div>` : ''}
     <div class="c">Gracias por su pago</div>
+    ${pdf ? htmlPieInformativo(base - 1) : `<div class="div"></div>${htmlMetodosPago(base - 1)}`}
   </body></html>`;
 };
 
@@ -80,49 +90,18 @@ const imprimirRecibo = async (params) => {
   }
 };
 
-const enviarWhatsApp = async ({ clienteNombre, codigoCliente, clienteWhatsapp, montoTotal, metodoPago, ventaNumero, producto, numeroRecibo, proximaVisita, saldoAntes, saldoDespues, nombreCobrador }) => {
-  const fecha   = new Date().toLocaleDateString('es-SV');
-  const proxFmt = proximaVisita
-    ? new Date(proximaVisita + 'T12:00:00').toLocaleDateString('es-SV', { day:'2-digit', month:'long', year:'numeric' })
-    : '';
-
-  const mensaje =
-`🏪 *DISTRIBUIDORA BM*
-📋 *RECIBO DE COBRO*
-━━━━━━━━━━━━━━━━━━━━
-🧾 Recibo: ${numeroRecibo || 'N/A'}
-📅 Fecha: ${fecha}
-📞 Teléfono: 6047-9762
-👤 Cliente: ${clienteNombre}${codigoCliente ? ` (Código: ${codigoCliente})` : ''}
-🔖 Venta: ${ventaNumero || 'N/A'}${producto ? `\n📦 Producto: ${producto}` : ''}
-💳 Método: ${metodoPago}
-👷 Cobrador: ${nombreCobrador}
-
-💸 Lo que debía: ${fmt(saldoAntes)}
-💰 *Lo que abona: ${fmt(montoTotal)}*
-📉 Lo que resta: ${fmt(saldoDespues)}
-${proxFmt ? `\n📅 *Próxima visita: ${proxFmt}*` : ''}
-━━━━━━━━━━━━━━━━━━━━
-¡Gracias por su pago! 🙏
-
-_Por favor confirme respondiendo *SÍ* si este recibo corresponde a su pago. En caso de alguna diferencia, comuníquese con nosotros._`;
-
-  const telefono = (clienteWhatsapp || '').replace(/\D/g, '');
-  if (!telefono) {
-    Alert.alert('Sin teléfono', 'El cliente no tiene número de WhatsApp registrado.');
-    return;
-  }
-  const numero = telefono.startsWith('503') ? telefono : `503${telefono}`;
-  const url = `https://wa.me/${numero}?text=${encodeURIComponent(mensaje)}`;
-  const puede = await Linking.canOpenURL(url);
-  if (puede) {
-    await Linking.openURL(url);
-  } else {
-    Alert.alert('WhatsApp no disponible', 'No se encontró WhatsApp instalado en este dispositivo.');
-  }
-};
+// Texto con la página web + recibo en PDF (ver services/reciboWhatsApp.js).
+const enviarWhatsApp = (params) => enviarReciboPorWhatsApp({
+  telefonoWhatsapp: params.clienteWhatsapp,
+  nombreDestino: params.clienteNombre,
+  resumenLinea: `🧾 Recibo ${params.numeroRecibo || 'N/A'} — ${fmt(params.montoTotal)}`,
+  generarHtmlPdf: () => buildHtmlRecibo({ ...params, pdf: true }),
+  nombreArchivo: `Recibo-${params.numeroRecibo || 'cobro'}`,
+  tituloDialogo: 'Recibo de cobro',
+});
 
 export default function PagoRegistradoScreen({ navigation, route }) {
+  const insets = useSafeAreaInsets();
   const {
     resultado, clienteId, clienteNombre, codigoCliente, clienteWhatsapp,
     montoTotal, metodoPago, ventaNumero, producto, numeroRecibo, proximaVisita,
@@ -145,7 +124,7 @@ export default function PagoRegistradoScreen({ navigation, route }) {
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0"/>
 
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: insets.top + 10 }]}>
         <Text style={s.headerTitle}>Pago registrado</Text>
         {numeroRecibo ? <Text style={s.headerRecibo}>Recibo {numeroRecibo}</Text> : null}
       </View>
@@ -236,7 +215,8 @@ const s = StyleSheet.create({
   root:   { flex:1, backgroundColor:'#f5f6fa' },
   header: {
     backgroundColor:'#1565C0',
-    paddingTop:(StatusBar.currentHeight||0)+10, paddingBottom:18, paddingHorizontal:20,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom:18, paddingHorizontal:20,
   },
   headerTitle: { color:'#fff', fontSize:22, fontWeight:'800' },
   headerRecibo:{ color:'rgba(255,255,255,0.75)', fontSize:12, fontWeight:'600', marginTop:2 },

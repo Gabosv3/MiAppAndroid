@@ -4,8 +4,9 @@ import {
   StatusBar, ActivityIndicator, Image, Modal, ScrollView,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import api from '../services/api';
+import api, { TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
@@ -43,7 +44,7 @@ export default function MisValesScreen({ navigation }) {
     setError('');
     try {
       const params = filtro ? { estado: filtro } : {};
-      const { data } = await api.get('/vales', { params });
+      const { data } = await api.get('/vales', { params, timeout: TIMEOUT_LECTURA_CACHE });
       setVales(Array.isArray(data) ? data : []);
     } catch (e) {
       setError(isOnline ? (e?.message || 'No se pudieron cargar los vales.') : 'Sin conexión — necesitas internet para ver tus vales.');
@@ -86,13 +87,14 @@ export default function MisValesScreen({ navigation }) {
     );
   };
 
+  const insets = useSafeAreaInsets();
   const s2 = styles();
 
   return (
     <View style={s2.root}>
       <StatusBar barStyle="light-content" backgroundColor="#1565C0" />
 
-      <View style={s2.header}>
+      <View style={[s2.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s2.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Text style={s2.backArrow}>←</Text>
         </TouchableOpacity>
@@ -185,7 +187,8 @@ const styles = () => StyleSheet.create({
   root:   { flex: 1, backgroundColor: '#f5f6fa' },
   header: {
     backgroundColor: '#1565C0', flexDirection: 'row', alignItems: 'center',
-    paddingTop: (StatusBar.currentHeight || 0) + 8, paddingBottom: 16, paddingHorizontal: 16, gap: 12,
+    paddingTop: 32, // paddingTop real (insets.top) se aplica inline en el render
+    paddingBottom: 16, paddingHorizontal: 16, gap: 12,
   },
   backBtn:    { paddingRight: 4 },
   backArrow:  { color: '#fff', fontSize: 24 },
