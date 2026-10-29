@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from './api';
 import * as backupOffline from './backupOffline';
+import { reportarErrorSync } from './reporteSync';
 
 const QUEUE_KEY = 'OFFLINE_REQUEST_QUEUE';
 const REJECTED_KEY = 'OFFLINE_REQUEST_REJECTED';
@@ -34,6 +35,17 @@ const moverARechazados = (item, motivo, statusCode) => conBloqueo(async () => {
   if (!lista.some((r) => r.id === item.id)) {
     lista.push({ ...item, motivo, statusCode, rechazadoEn: new Date().toISOString() });
     await AsyncStorage.setItem(REJECTED_KEY, JSON.stringify(lista));
+    // Avisa al servidor/panel: sin esto solo se enteraba quien tiene el teléfono.
+    reportarErrorSync({
+      client_id: `q-${item.id}`,
+      tipo: 'rechazado',
+      metodo: item.method,
+      endpoint: item.url,
+      etiqueta: item.label,
+      http_status: Number(statusCode) || undefined,
+      motivo,
+      ocurrido_en: item.createdAt,
+    });
   }
 });
 

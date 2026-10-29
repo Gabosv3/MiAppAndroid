@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fechaHoyLocal, fechaLocalDesde } from './dateUtils';
 import * as backupOffline from './backupOffline';
+import { reportarErrorSync } from './reporteSync';
 
 // Candado por clave: casi todo aquí es leer-modificar-escribir sobre un mismo
 // JSON de AsyncStorage. Sin esto, dos operaciones casi simultáneas (ej. un
@@ -232,6 +233,18 @@ const moverARechazados = (pago, motivo, statusCode) => conBloqueo(KEYS.rechazado
   if (!lista.some(r => r.id === pago.id)) {
     lista.push({ ...pago, motivo, statusCode, rechazadoEn: new Date().toISOString() });
     await AsyncStorage.setItem(KEYS.rechazados, JSON.stringify(lista));
+    // Avisa al servidor/panel (solo descripción y monto, no el cobro completo).
+    reportarErrorSync({
+      client_id: `p-${pago.id}`,
+      tipo: 'rechazado',
+      metodo: 'POST',
+      endpoint: `/cobros/clientes/${pago.clienteId}/pagar`,
+      etiqueta: `Cobro ${pago.clienteNombre || ''} — ${pago.numeroRecibo || pago.id}`.trim(),
+      monto: Number(pago.monto) || undefined,
+      http_status: Number(statusCode) || undefined,
+      motivo,
+      ocurrido_en: pago.creadoEn,
+    });
   }
 });
 

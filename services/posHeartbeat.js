@@ -21,6 +21,9 @@ import * as TaskManager from 'expo-task-manager';
 import * as Battery from 'expo-battery';
 import * as Application from 'expo-application';
 import api from './api';
+import * as offlineQueue from './offlineQueue';
+import { leerPagosPendientes, leerPagosRechazados } from './cobrosOffline';
+import { setSerialParaReporte, vaciarReportes } from './reporteSync';
 
 const TASK_NAME   = 'SIDB_LOCATION_TASK';
 const INTERVAL_MS = 2 * 60 * 1000; // 2 min foreground
@@ -80,6 +83,24 @@ let _lastError = null;
 export const setError   = (msg) => { _lastError = msg || null; };
 export const clearError = ()    => { _lastError = null; };
 
+// ── Lo que el teléfono tiene sin subir ────────────────────────────────────────
+// El panel usa esto para avisar si algo lleva demasiado en la cola (atascado) o
+// si el servidor rechazó operaciones.
+const resumenSinSubir = async () => {
+  try {
+    const [cola, pagos, rechCola, rechPagos] = await Promise.all([
+      offlineQueue.getQueue(), leerPagosPendientes(), offlineQueue.getRejected(), leerPagosRechazados(),
+    ]);
+    const fechas = [...cola.map((i) => i.createdAt), ...pagos.map((p) => p.creadoEn)]
+      .map((f) => Date.parse(f)).filter((n) => !Number.isNaN(n));
+    return {
+      pendientes_sync: cola.length + pagos.length,
+      pendiente_antiguo_min: fechas.length ? Math.max(0, Math.round((Date.now() - Math.min(...fechas)) / 60000)) : null,
+      rechazados_sync: rechCola.length + rechPagos.length,
+    };
+  } catch { return {}; }
+};
+
 // ── Envío principal ───────────────────────────────────────────────────────────
 export const sendHeartbeat = async (coords = null) => {
   try {
@@ -97,7 +118,11 @@ export const sendHeartbeat = async (coords = null) => {
       } catch { /* ignore */ }
     }
 
+    setSerialParaReporte(serial);
+    const sinSubir = await resumenSinSubir();
+
     await api.post('/pos/heartbeat', {
+      ...sinSubir,
       device_serial: serial,
       device_nombre: `POS-${serial.slice(-4).toUpperCase()}`,
       lat,
@@ -106,6 +131,8 @@ export const sendHeartbeat = async (coords = null) => {
       app_version: APP_VERSION,
       error: _lastError,
     });
+    // Hay señal (el heartbeat llegó): se envían los reportes que quedaron pendientes.
+    vaciarReportes();
   } catch {
     // Falla silenciosa — sin red simplemente no se envía
   }
