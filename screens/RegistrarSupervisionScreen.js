@@ -58,7 +58,7 @@ export default function RegistrarSupervisionScreen({ route, navigation }) {
           ]);
         } catch (e) {
           if (esErrorTransitorio(e)) await guardarOffline();
-          else Alert.alert('Error', e?.response?.data?.mensaje || 'No se pudo registrar la evaluación.');
+          else Alert.alert('Error', e?.message || 'No se pudo registrar la evaluación.');
         }
       } else {
         await guardarOffline();

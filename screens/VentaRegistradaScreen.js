@@ -127,7 +127,7 @@ export default function VentaRegistradaScreen({ navigation, route }) {
         const b64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
         setLogoUri(`data:image/png;base64,${b64}`);
         logoLoaded.current = true;
-      } catch (_) {}
+      } catch (_) { console.warn('[VentaRegistradaScreen] fallo ignorado:', _?.message || _); }
     })();
   }, []);
 

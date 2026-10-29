@@ -24,7 +24,7 @@ export default function RutasSupervisadasScreen({ navigation }) {
       const { data } = await api.get('/cobros/supervisor/rutas', { timeout: TIMEOUT_LECTURA_CACHE });
       setRutas(data.rutas || []);
     } catch (e) {
-      setError(e?.response?.data?.mensaje || 'No se pudieron cargar tus rutas supervisadas.');
+      setError(e?.message || 'No se pudieron cargar tus rutas supervisadas.');
     } finally {
       setLoading(false);
     }

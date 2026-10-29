@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, AppState, StatusBar, TouchableOpacity } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { hasPin, setPin, verifyPin, isLockEnabled } from '../services/appLock';
+import { hasPin, setPin, verifyPin, isLockEnabled, bloqueoRestanteSeg } from '../services/appLock';
 import PinPad from './PinPad';
 
 // Overlay a pantalla completa que se monta encima de toda la app cuando hay
@@ -14,6 +14,7 @@ export default function AppLockOverlay() {
   const [listo, setListo] = useState(false);
   const [modo, setModo] = useState('verificar'); // 'verificar' | 'crear1' | 'crear2'
   const [desbloqueado, setDesbloqueado] = useState(false);
+  const [bloqueoSeg, setBloqueoSeg] = useState(0);
   const [habilitado, setHabilitado] = useState(true);
   const [pinTemp, setPinTemp] = useState('');
   const [input, setInput] = useState('');
@@ -139,6 +140,7 @@ export default function AppLockOverlay() {
           setInput('');
         } else {
           setError(true);
+          bloqueoRestanteSeg().then(setBloqueoSeg);
           setTimeout(() => { setError(false); setInput(''); }, 500);
         }
       });
@@ -166,6 +168,9 @@ export default function AppLockOverlay() {
         <PinPad valor={input} onCambiar={setInput} error={error} />
       </View>
       {error && <Text style={s.errorTxt}>{modo === 'crear2' ? 'No coincide, intenta de nuevo' : 'PIN incorrecto'}</Text>}
+      {bloqueoSeg > 0 && modo === 'verificar' && (
+        <Text style={s.errorTxt}>Demasiados intentos. Espera {bloqueoSeg} s antes de volver a intentar.</Text>
+      )}
 
       {modo === 'verificar' && biometriaDisponible && (
         <TouchableOpacity

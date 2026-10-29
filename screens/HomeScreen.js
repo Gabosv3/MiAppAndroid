@@ -7,6 +7,8 @@ import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
+import { precargarDia, precargaHechaHoy } from '../services/precargaDia';
+import { avisarRechazados } from '../services/rechazados';
 import CustomDrawer from '../navigation/CustomDrawerContent';
 import Constants from 'expo-constants';
 import { verificarActualizacion, versionActual } from '../services/updateChecker';
@@ -38,10 +40,38 @@ export default function HomeScreen({ navigation }) {
       try {
         const count = await offlineQueue.getQueueCount();
         if (count > 0) await offlineQueue.syncQueue();
-      } catch (_) {}
+        avisarRechazados();
+      } catch (_) { console.warn('[HomeScreen] fallo ignorado:', _?.message || _); }
       syncing.current = false;
     })();
   }, [isOnline]);
+
+  // Precarga del día: con señal y una vez por día, deja descargado TODO lo que
+  // se necesita sin conexión (ruta, detalle de cada cliente, catálogos).
+  const [precarga, setPrecarga] = useState({ estado: 'idle', hechos: 0, total: 0, detalle: '' });
+  const ejecutarPrecarga = React.useCallback(async () => {
+    setPrecarga({ estado: 'cargando', hechos: 0, total: 0, detalle: '' });
+    try {
+      const r = await precargarDia(user?.perfil, (p) =>
+        setPrecarga((prev) => ({ ...prev, estado: 'cargando', hechos: p.hechos, total: p.total })));
+      setPrecarga({
+        estado: r.ok ? 'ok' : 'parcial',
+        hechos: r.descargados, total: r.total,
+        detalle: r.errores.slice(0, 3).join('\n'),
+      });
+    } catch (e) {
+      setPrecarga({ estado: 'parcial', hechos: 0, total: 0, detalle: e?.message || String(e) });
+    }
+  }, [user?.perfil]);
+
+  useEffect(() => {
+    if (!isOnline || !user?.perfil) return;
+    if (!user.perfil.es_cobrador && !user.perfil.es_vendedor) return;
+    precargaHechaHoy().then((hecha) => {
+      if (hecha) setPrecarga((p) => (p.estado === 'idle' ? { ...p, estado: 'ok', total: -1 } : p));
+      else ejecutarPrecarga();
+    });
+  }, [isOnline, user?.perfil, ejecutarPrecarga]);
 
   const s = styles(colors);
 
@@ -165,6 +195,22 @@ export default function HomeScreen({ navigation }) {
               {isOnline ? 'Conectado al servidor' : 'Sin conexión'}
             </Text>
           </View>
+
+          {precarga.estado !== 'idle' && (
+            <TouchableOpacity
+              disabled={precarga.estado === 'cargando' || !isOnline}
+              onPress={ejecutarPrecarga}
+              style={{ marginTop: 6 }}
+            >
+              <Text style={{ fontSize: 12, color: precarga.estado === 'parcial' ? '#e53e3e' : precarga.estado === 'ok' ? '#10B981' : '#F5A623' }}>
+                {precarga.estado === 'cargando'
+                  ? `⬇️ Descargando datos del día${precarga.total ? ` ${precarga.hechos}/${precarga.total}` : '...'}`
+                  : precarga.estado === 'ok'
+                    ? '✅ Datos del día descargados (sin señal podrás trabajar)'
+                    : `⚠️ Descarga incompleta${precarga.total ? ` (${precarga.hechos}/${precarga.total} clientes)` : ''} — toca para reintentar${precarga.detalle ? `\n${precarga.detalle}` : ''}`}
+              </Text>
+            </TouchableOpacity>
+          )}
 
           {/* Versión y botón de actualización */}
           <View style={s.versionRow}>

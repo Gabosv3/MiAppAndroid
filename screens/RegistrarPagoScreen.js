@@ -171,7 +171,8 @@ export default function RegistrarPagoScreen({ navigation, route }) {
           nombreCobrador,
         });
       } catch (e) {
-        Alert.alert('Error', 'No se pudo guardar el cobro offline.');
+        console.warn('[RegistrarPago] guardar offline falló:', e?.message || e);
+        Alert.alert('Error', `No se pudo guardar el cobro offline.\n${e?.message || e}\n\nRevisa el historial antes de volver a registrarlo para no duplicarlo.`);
       } finally { setSubmitting(false); }
       return;
     }
@@ -231,6 +232,7 @@ export default function RegistrarPagoScreen({ navigation, route }) {
           [
             { text: 'Cancelar', style: 'cancel' },
             { text: 'Guardar offline', onPress: async () => {
+              try {
               const numeroRecibo = await generarNumeroRecibo(user?.id);
               const proxVisita = calcProximaVisita();
               const pagoEncolado = await encolarPago({
@@ -250,6 +252,12 @@ export default function RegistrarPagoScreen({ navigation, route }) {
               });
               await marcarClienteVisitado(cliente.id);
               navigation.goBack();
+              } catch (errGuardar) {
+                // Sin esto un fallo al guardar offline era una promesa rechazada
+                // sin captura: el cobrador no veía nada y el cobro no quedaba.
+                console.warn('[RegistrarPago] guardar offline falló:', errGuardar?.message || errGuardar);
+                Alert.alert('No se guardó el cobro', `${errGuardar?.message || errGuardar}\n\nIntenta de nuevo.`);
+              }
             }},
           ]
         );

@@ -27,7 +27,7 @@ export default function HistorialRutaSupervisadaScreen({ route, navigation }) {
       const { data: resp } = await api.get(`/cobros/supervisor/rutas/${rutaId}/historial`, { timeout: TIMEOUT_LECTURA_CACHE });
       setData(resp);
     } catch (e) {
-      setError(e?.response?.data?.mensaje || 'No se pudo cargar el historial de la ruta.');
+      setError(e?.message || 'No se pudo cargar el historial de la ruta.');
     } finally {
       setLoading(false);
     }
@@ -38,7 +38,7 @@ export default function HistorialRutaSupervisadaScreen({ route, navigation }) {
   const items = data ? [
     ...(data.pagos || []).map(p => ({ ...p, _key: `pago-${p.numero_recibo}-${p.hora}` })),
     ...(data.visitas || []).map(v => ({ ...v, _key: `visita-${v.cliente}-${v.hora}` })),
-  ].sort((a, b) => a.hora.localeCompare(b.hora)) : [];
+  ].sort((a, b) => String(a.hora || '').localeCompare(String(b.hora || ''))) : [];
 
   const renderItem = ({ item }) => (
     <View style={s.card}>

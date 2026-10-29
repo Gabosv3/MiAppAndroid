@@ -6,7 +6,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import api from '../services/api';
 import { useConnectivity } from '../services/connectivity';
-import { leerPagosPendientes, eliminarPago, sincronizarPagosPendientes, leerRutaCache, contarClientesConRespaldo } from '../services/cobrosOffline';
+import { leerPagosPendientes, eliminarPago, sincronizarPagosPendientes, leerRutaCache, contarClientesConRespaldo, leerPagosRechazados, descartarPagosRechazados } from '../services/cobrosOffline';
 import * as offlineQueue from '../services/offlineQueue';
 import * as backupOffline from '../services/backupOffline';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -34,6 +34,7 @@ export default function DiagnosticoScreen({ navigation }) {
   const [sincronizando, setSincronizando] = useState(false);
   const [pagosPend, setPagosPend] = useState([]);
   const [colaGenerica, setColaGenerica] = useState([]);
+  const [rechazados, setRechazados] = useState([]);
   const [carpetaConfigurada, setCarpetaConfigurada] = useState(false);
   const [configurandoCarpeta, setConfigurandoCarpeta] = useState(false);
   const [respaldoClientes, setRespaldoClientes] = useState({ conRespaldo: 0, totalRuta: 0 });
@@ -41,9 +42,13 @@ export default function DiagnosticoScreen({ navigation }) {
   const cargar = useCallback(async () => {
     setCargando(true);
     try {
-      const [pagos, cola, hayCarpeta, rutaCache] = await Promise.all([
+      const [pagos, cola, hayCarpeta, rutaCache, pagosRech, colaRech] = await Promise.all([
         leerPagosPendientes(), offlineQueue.getQueue(), backupOffline.hayCarpetaConfigurada(),
-        leerRutaCache(),
+        leerRutaCache(), leerPagosRechazados(), offlineQueue.getRejected(),
+      ]);
+      setRechazados([
+        ...pagosRech.map((p) => ({ id: p.id, titulo: `Cobro ${p.clienteNombre || ''} $${Number(p.monto || 0).toFixed(2)}`, motivo: p.motivo, cuando: p.rechazadoEn })),
+        ...colaRech.map((c) => ({ id: c.id, titulo: c.label || c.url, motivo: c.motivo, cuando: c.rechazadoEn })),
       ]);
       setPagosPend(pagos);
       setColaGenerica(cola);
@@ -100,7 +105,7 @@ export default function DiagnosticoScreen({ navigation }) {
       Alert.alert(
         'Sincronización terminada',
         `Cobros: ${resultado.synced}/${resultado.total} enviados.` +
-          (resultado.errores?.length ? `\n\n${resultado.errores.length} con error (se eliminaron de la cola):\n` +
+          (resultado.errores?.length ? `\n\n${resultado.errores.length} con error (quedan guardados en la sección Rechazados):\n` +
             resultado.errores.map(e => `• ${e.cliente}: ${e.error}`).join('\n') : '')
       );
     } catch (e) {
@@ -167,7 +172,7 @@ export default function DiagnosticoScreen({ navigation }) {
     );
   }
 
-  const totalPend = pagosPend.length + colaGenerica.length;
+  const totalPend = pagosPend.length + colaGenerica.length + rechazados.length;
 
   return (
     <View style={s.root}>
@@ -273,6 +278,28 @@ export default function DiagnosticoScreen({ navigation }) {
                     </View>
                   </View>
                 ))}
+              </>
+            )}
+
+            {rechazados.length > 0 && (
+              <>
+                <Text style={[s.seccionTitulo, { marginTop: 16, color: '#e53e3e' }]}>Rechazados por el servidor ({rechazados.length})</Text>
+                {rechazados.map((r) => (
+                  <View key={r.id} style={s.card}>
+                    <Text style={s.cardTitulo}>{r.titulo}</Text>
+                    <Text style={[s.cardMeta, { color: '#e53e3e' }]}>Motivo: {r.motivo || 'sin detalle'}</Text>
+                    <Text style={s.cardMeta}>Rechazado: {fmtFecha(r.cuando)}</Text>
+                  </View>
+                ))}
+                <TouchableOpacity
+                  style={s.quitarBtn}
+                  onPress={() => Alert.alert('¿Borrar los rechazados?', 'Hazlo solo después de avisar a tu supervisor: estas operaciones NO están en el sistema.', [
+                    { text: 'Cancelar', style: 'cancel' },
+                    { text: 'Borrar', style: 'destructive', onPress: async () => { await Promise.all([descartarPagosRechazados(), offlineQueue.clearRejected()]); cargar(); } },
+                  ])}
+                >
+                  <Text style={s.quitarBtnTxt}>Borrar rechazados</Text>
+                </TouchableOpacity>
               </>
             )}
 

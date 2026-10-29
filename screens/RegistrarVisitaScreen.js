@@ -68,7 +68,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
       setCapturandoGps(true);
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       setUbicacion({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-    } catch (_) {}
+    } catch (_) { console.warn('[RegistrarVisitaScreen] fallo ignorado:', _?.message || _); }
     finally { setCapturandoGps(false); }
   }, []);
 
@@ -247,7 +247,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
           await guardarOffline(destino, resultadoDestino, sinEvidenciaDestino, idempotencyKey);
           return { ok: true, offline: true };
         }
-        return { ok: false, error: e?.response?.data?.message || e?.message || 'No se pudo registrar la visita.' };
+        return { ok: false, error: e?.message || 'No se pudo registrar la visita.' };
       }
     };
 
@@ -276,7 +276,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
         }
       } else {
         const detalle = fallidos.length
-          ? `\n\nNo se pudo en: ${fallidos.map(f => f.destino.nombre).join(', ')}`
+          ? `\n\nNo se pudo en:\n${fallidos.map(f => `• ${f.destino.nombre}: ${f.error || 'error desconocido'}`).join('\n')}`
           : '';
         Alert.alert(
           exitosos.length > 0 ? '✅ Visita registrada para el grupo' : 'Error',
@@ -285,7 +285,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
         );
       }
     } catch (e) {
-      Alert.alert('Error', e?.response?.data?.message || e?.message || 'No se pudo registrar la visita.');
+      Alert.alert('Error', e?.message || 'No se pudo registrar la visita.');
     } finally {
       setSubmitting(false);
     }

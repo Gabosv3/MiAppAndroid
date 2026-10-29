@@ -3,13 +3,49 @@ import api from './api';
 import * as backupOffline from './backupOffline';
 
 const QUEUE_KEY = 'OFFLINE_REQUEST_QUEUE';
+const REJECTED_KEY = 'OFFLINE_REQUEST_REJECTED';
+
+// Candado: encolar, quitar y rechazar son leer-modificar-escribir sobre el
+// mismo JSON. Sin esto, encolar una venta mientras la sincronización quita
+// otra pisaba la cola y se perdía una de las dos.
+let _cadena = Promise.resolve();
+const conBloqueo = (fn) => {
+  const siguiente = _cadena.catch(() => {}).then(fn);
+  _cadena = siguiente;
+  return siguiente;
+};
+
+// Errores que se reintentan (NO son de datos): sin respuesta, 5xx, 401 (sesión
+// vencida — antes TODA la cola se borraba con un 401), 408 y 429.
+const esReintentable = (error) => {
+  const st = error?.response?.status;
+  return !error?.response || st >= 500 || st === 401 || st === 408 || st === 429;
+};
+
+export const getRejected = async () => {
+  const raw = await AsyncStorage.getItem(REJECTED_KEY);
+  try { return raw ? JSON.parse(raw) : []; } catch { return []; }
+};
+
+export const clearRejected = async () => { await AsyncStorage.removeItem(REJECTED_KEY); };
+
+const moverARechazados = (item, motivo, statusCode) => conBloqueo(async () => {
+  const lista = await getRejected();
+  if (!lista.some((r) => r.id === item.id)) {
+    lista.push({ ...item, motivo, statusCode, rechazadoEn: new Date().toISOString() });
+    await AsyncStorage.setItem(REJECTED_KEY, JSON.stringify(lista));
+  }
+});
 
 const getRawQueue = async () => {
   const raw = await AsyncStorage.getItem(QUEUE_KEY);
   if (!raw) return [];
   try {
     return JSON.parse(raw);
-  } catch {
+  } catch (e) {
+    // No se descarta en silencio: se respalda para poder recuperarla.
+    console.warn('[offlineQueue] cola corrupta, respaldada:', e?.message || e);
+    AsyncStorage.setItem(`${QUEUE_KEY}__CORRUPTO`, raw).catch(() => {});
     return [];
   }
 };
@@ -28,7 +64,6 @@ export const getQueueCount = async () => {
 };
 
 export const enqueueRequest = async ({ method, url, data, label, useFormData = false }) => {
-  const queue = await getRawQueue();
   let payload = data || {};
   try {
     payload = JSON.parse(JSON.stringify(data || {}));
@@ -46,20 +81,23 @@ export const enqueueRequest = async ({ method, url, data, label, useFormData = f
     useFormData: Boolean(useFormData),
     createdAt: new Date().toISOString(),
   };
-  queue.push(item);
-  await saveRawQueue(queue);
+  await conBloqueo(async () => {
+    const queue = await getRawQueue();
+    queue.push(item);
+    await saveRawQueue(queue);
+  });
   // No bloquea el guardado normal si falla (ej. todavía no se configuró la
   // carpeta de respaldo) — es una bitácora extra, no la fuente de verdad.
   backupOffline.registrarPendiente(item).catch(() => {});
   return item;
 };
 
-export const removeRequest = async (id) => {
+export const removeRequest = (id) => conBloqueo(async () => {
   const queue = await getRawQueue();
   const filtered = queue.filter((item) => item.id !== id);
   await saveRawQueue(filtered);
   return filtered;
-};
+});
 
 export const clearQueue = async () => {
   await AsyncStorage.removeItem(QUEUE_KEY);
@@ -171,7 +209,7 @@ const _syncQueueInterno = async () => {
       backupOffline.registrarSincronizado(item).catch(() => {});
       console.log(`   ✅ ÉXITO: ${item.label} sincronizado`);
     } catch (error) {
-      const errorMessage = error.response?.data?.message || error.message || String(error);
+      const errorMessage = error.message || String(error);
       const errorStatus = error.response?.status || 'sin-respuesta';
 
       details.push({
@@ -186,21 +224,20 @@ const _syncQueueInterno = async () => {
       console.warn(`      Mensaje: ${errorMessage}`);
       console.warn(`      Status: ${errorStatus}`);
 
-      // Sin respuesta (red caída) O el servidor respondió 5xx (caído
-      // momentáneamente, reiniciando) → NO es un error de datos, es
-      // transitorio. Detener y reintentar todo en el próximo sync, sin
+      // Sin respuesta (red caída), 5xx o 401 (sesión vencida) → NO es un
+      // error de datos. Detener y reintentar todo en el próximo sync, sin
       // borrar nada de la cola — de lo contrario se pierde el pago/venta.
       const statusNum = error.response?.status;
-      const esTransitorio = !error.response || (statusNum && statusNum >= 500);
-      if (esTransitorio) {
+      if (esReintentable(error)) {
         console.log(`   🛑 DETENIENDO - Problema de conexión o servidor caído (${errorStatus})`);
         break;
       }
 
-      // Si el servidor respondió con error 4xx → sí es un error real de
-      // datos (validación, permisos, etc.). Eliminar de la cola para que
-      // no bloquee los demás — reintentarlo no lo va a arreglar.
-      console.log(`   ⚠️ Error del servidor (${errorStatus}), eliminando de cola para no bloquear`);
+      // Error 4xx real de datos (validación, permisos, etc.): reintentarlo no
+      // lo arregla y no debe bloquear los demás, pero TAMPOCO se borra en
+      // silencio — pasa a "rechazados" con el motivo para que se vea.
+      console.log(`   ⚠️ Error del servidor (${errorStatus}), movido a rechazados`);
+      await moverARechazados(item, errorMessage, errorStatus);
       await removeRequest(item.id);
     }
   }

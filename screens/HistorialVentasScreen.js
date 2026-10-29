@@ -194,7 +194,7 @@ export default function HistorialVentasScreen({ navigation }) {
       const b64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
       setLogoUri(`data:image/png;base64,${b64}`);
       logoLoaded.current = true;
-    } catch (_) {}
+    } catch (_) { console.warn('[HistorialVentasScreen] fallo ignorado:', _?.message || _); }
   }, []);
 
   // Cargar ventas del día (la API ya filtra por el vendedor autenticado)
@@ -204,7 +204,10 @@ export default function HistorialVentasScreen({ navigation }) {
       cargarLogo();
       try {
         const hoy = fechaHoyLocal(); // YYYY-MM-DD en hora de El Salvador
-        const { data } = await api.get('/ventas?per_page=200');
+        // El servidor no filtra por fecha y ordena de la más reciente a la más
+        // antigua: las de hoy vienen primero. 200 ventas completas (con sus
+        // detalles) era mucho JSON para teléfonos de 3 GB de RAM.
+        const { data } = await api.get('/ventas?per_page=100');
         const todas = Array.isArray(data) ? data : (data.data || []);
         // Filtrar solo las del día de hoy por fecha_venta (en hora local, no UTC)
         const deHoy = todas.filter(v => {
@@ -213,7 +216,10 @@ export default function HistorialVentasScreen({ navigation }) {
         });
         setVentas(deHoy);
       } catch (e) {
-        Alert.alert('Error', 'No se pudieron cargar las ventas del día.');
+        console.warn('[HistorialVentas] cargar ventas:', e?.message || e);
+        Alert.alert('No se pudieron cargar las ventas del día', `${e?.message || e}
+
+Las ventas guardadas sin conexión aparecerán aquí cuando se envíen.`);
       } finally {
         setLoading(false);
       }
@@ -227,8 +233,9 @@ export default function HistorialVentasScreen({ navigation }) {
     try {
       const html = buildTicketHtml(venta, logoUri);
       await Print.printAsync({ html });
-    } catch (_) {
-      Alert.alert('Error', 'No se pudo imprimir el ticket.');
+    } catch (e) {
+      console.warn('[HistorialVentas] imprimir:', e?.message || e);
+      Alert.alert('No se pudo imprimir el ticket', String(e?.message || e));
     }
   }, [logoUri]);
 

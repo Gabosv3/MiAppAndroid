@@ -56,6 +56,48 @@ const normalizePaymentPlans = (plans) => {
 };
 
 // ==================== COMPONENTE PRINCIPAL ====================
+// Tarjeta de producto memoizada: con 84 estados en la pantalla, cualquier
+// tecleo o cambio del carrito re-renderizaba TODAS las tarjetas visibles.
+// Solo se vuelve a pintar si cambia el producto (stock/precio), los estilos
+// o la escala de texto.
+const ProductoCard = React.memo(function ProductoCard({ item, s, escala, onAgregar }) {
+  return (
+      <TouchableOpacity
+        style={[s.prodCard, (item.stock_disponible ?? 0) <= 0 && { opacity: 0.6 }]}
+        onPress={() => (item.stock_disponible ?? 0) > 0 && onAgregar(item)}
+        activeOpacity={0.8}
+        disabled={(item.stock_disponible ?? 0) <= 0}
+      >
+        <View style={s.prodImgBox}>
+          <Text style={s.prodEmoji}>📦</Text>
+        </View>
+        {/* Sin límite de líneas — muchos productos comparten el mismo
+            nombre base y solo se diferencian por el color al final
+            (ej. "Sofá reclinable 3 plazas gris"), que se estaba
+            cortando con "...". La tarjeta simplemente crece según lo
+            que necesite el nombre, en vez de truncar. */}
+        <Text style={[s.prodNombre, { fontSize: 11 * escala, lineHeight: 15 * escala, minHeight: 30 * escala }]}>{item.nombre}</Text>
+        {item.codigo ? <Text style={[s.prodCodigo, { fontSize: 9 * escala }]}>{item.codigo}</Text> : null}
+        {item.precios_cuotas && Array.isArray(item.precios_cuotas) && item.precios_cuotas.length > 0 ? (
+          <Text style={[s.prodCuotas, { fontSize: 9 * escala }]}>Pago: contado o cuotas</Text>
+        ) : null}
+        <View style={s.prodFooter}>
+          <Text style={[s.prodPrecio, { fontSize: 12 * escala }]}>{fmt(item.precio_venta)}</Text>
+          <View style={s.stockBadge}>
+            <Text style={[s.stockTxt, { fontSize: 9 * escala }]}>{(item.stock_disponible ?? item.stock ?? 0) > 0 ? `Stock: ${item.stock_disponible}` : 'Sin stock'}</Text>
+          </View>
+        </View>
+        <TouchableOpacity
+          style={[s.addBtn, (item.stock_disponible ?? 0) <= 0 && s.addBtnDisabled]}
+          onPress={() => onAgregar(item)}
+          disabled={(item.stock_disponible ?? 0) <= 0}
+        >
+          <Text style={s.addBtnTxt}>+</Text>
+        </TouchableOpacity>
+      </TouchableOpacity>
+  );
+});
+
 export default function NuevaVentaScreen({ navigation, route }) {
   const { colors } = useTheme();
   // Modo corrección: se abre desde "Mis ventas de hoy" sobre una venta que
@@ -683,7 +725,7 @@ export default function NuevaVentaScreen({ navigation, route }) {
         sucursalId: asignacion.sucursal_id || sucursalId,
       });
     } catch (e) {
-      const msg = e?.response?.data?.message || e?.message || String(e);
+      const msg = e?.message || String(e);
       const isOffline = esErrorTransitorio(e);
 
       if (msg.includes('No hay asignación') || e?.response?.status === 404) {
@@ -979,7 +1021,7 @@ export default function NuevaVentaScreen({ navigation, route }) {
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     } catch (e) {
-      Alert.alert('No se pudo corregir', e?.response?.data?.mensaje || e.message || 'Intenta de nuevo.');
+      Alert.alert('No se pudo corregir', e?.message || 'Intenta de nuevo.');
     } finally {
       setSubmitting(false);
     }
@@ -1115,7 +1157,9 @@ export default function NuevaVentaScreen({ navigation, route }) {
     });
   }, [productos, busqueda, categoriaActiva]);
 
-  const s = styles(colors);
+  // Memoizado: antes se recreaba todo el StyleSheet en cada render (84 estados
+  // en esta pantalla → cientos de renders por venta) y rompía React.memo.
+  const s = useMemo(() => styles(colors), [colors]);
   const catList = [{ id: null, nombre: 'Todos' }, ...categorias];
 
   // ──────────────────────────────── RENDER ────────────────────────────────────
@@ -1349,40 +1393,12 @@ export default function NuevaVentaScreen({ navigation, route }) {
             ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
             showsVerticalScrollIndicator={false}
             renderItem={({ item }) => (
-              <TouchableOpacity
-                style={[s.prodCard, (item.stock_disponible ?? 0) <= 0 && { opacity: 0.6 }]}
-                onPress={() => (item.stock_disponible ?? 0) > 0 && agregarProducto(item)}
-                activeOpacity={0.8}
-                disabled={(item.stock_disponible ?? 0) <= 0}
-              >
-                <View style={s.prodImgBox}>
-                  <Text style={s.prodEmoji}>📦</Text>
-                </View>
-                {/* Sin límite de líneas — muchos productos comparten el mismo
-                    nombre base y solo se diferencian por el color al final
-                    (ej. "Sofá reclinable 3 plazas gris"), que se estaba
-                    cortando con "...". La tarjeta simplemente crece según lo
-                    que necesite el nombre, en vez de truncar. */}
-                <Text style={[s.prodNombre, { fontSize: 11 * escala, lineHeight: 15 * escala, minHeight: 30 * escala }]}>{item.nombre}</Text>
-                {item.codigo ? <Text style={[s.prodCodigo, { fontSize: 9 * escala }]}>{item.codigo}</Text> : null}
-                {item.precios_cuotas && Array.isArray(item.precios_cuotas) && item.precios_cuotas.length > 0 ? (
-                  <Text style={[s.prodCuotas, { fontSize: 9 * escala }]}>Pago: contado o cuotas</Text>
-                ) : null}
-                <View style={s.prodFooter}>
-                  <Text style={[s.prodPrecio, { fontSize: 12 * escala }]}>{fmt(item.precio_venta)}</Text>
-                  <View style={s.stockBadge}>
-                    <Text style={[s.stockTxt, { fontSize: 9 * escala }]}>{(item.stock_disponible ?? item.stock ?? 0) > 0 ? `Stock: ${item.stock_disponible}` : 'Sin stock'}</Text>
-                  </View>
-                </View>
-                <TouchableOpacity
-                  style={[s.addBtn, (item.stock_disponible ?? 0) <= 0 && s.addBtnDisabled]}
-                  onPress={() => agregarProducto(item)}
-                  disabled={(item.stock_disponible ?? 0) <= 0}
-                >
-                  <Text style={s.addBtnTxt}>+</Text>
-                </TouchableOpacity>
-              </TouchableOpacity>
+              <ProductoCard item={item} s={s} escala={escala} onAgregar={agregarProducto} />
             )}
+            initialNumToRender={8}
+            maxToRenderPerBatch={6}
+            windowSize={5}
+            removeClippedSubviews={Platform.OS === 'android'}
             ListEmptyComponent={
               <View style={{ alignItems: 'center', paddingTop: 40 }}>
                 <Text style={{ color: colors.textMuted, fontSize: 13 }}>

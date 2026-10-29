@@ -2,6 +2,36 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fechaHoyLocal, fechaLocalDesde } from './dateUtils';
 import * as backupOffline from './backupOffline';
 
+// Candado por clave: casi todo aquí es leer-modificar-escribir sobre un mismo
+// JSON de AsyncStorage. Sin esto, dos operaciones casi simultáneas (ej. un
+// abono a varias cuentas de un grupo familiar, o encolar un cobro mientras
+// la sincronización elimina otro) leen el mismo estado viejo y la segunda
+// escritura pisa a la primera — se pierde un cobro o un registro del historial.
+const _colasBloqueo = new Map();
+const conBloqueo = (clave, fn) => {
+  const previo = _colasBloqueo.get(clave) || Promise.resolve();
+  const siguiente = previo.catch(() => {}).then(fn);
+  _colasBloqueo.set(clave, siguiente);
+  return siguiente;
+};
+
+// Lee un arreglo JSON. Si el contenido está corrupto NO lo descarta en
+// silencio: lo copia a "<clave>__CORRUPTO" para poder recuperarlo y recién
+// entonces devuelve [] (antes, encolar un cobro con la cola corrupta tronaba
+// y el cobro nunca se guardaba).
+const leerArreglo = async (clave) => {
+  const raw = await AsyncStorage.getItem(clave);
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v : [];
+  } catch (e) {
+    console.warn(`[cobrosOffline] ${clave} corrupto, respaldado:`, e?.message || e);
+    await AsyncStorage.setItem(`${clave}__CORRUPTO`, raw).catch(() => {});
+    return [];
+  }
+};
+
 const KEYS = {
   ruta:        'COBROS_RUTA_CACHE',
   clientes:    'COBROS_CLIENTES_CACHE',
@@ -10,6 +40,8 @@ const KEYS = {
   orden:       'COBROS_ORDEN_CLIENTES',
   visitados:   'COBROS_VISITADOS_HOY',
   correlativo: 'COBROS_CORRELATIVO_LOCAL',
+  rechazados:  'COBROS_PAGOS_RECHAZADOS',
+  vehiculos:   'COBROS_VEHICULOS_CACHE',
 };
 
 // ─── CORRELATIVO DE RECIBO (por dispositivo + cobrador) ──────────────────────
@@ -55,11 +87,36 @@ export const leerRutaCache = async () => {
 
 // ─── DETALLE CLIENTE ─────────────────────────────────────────────────────────
 
+// Cada cliente va en su PROPIA clave (COBROS_CLI_<id>). Antes todos vivían en
+// un único JSON: con el detalle completo de 80-130 clientes eran varios MB y
+// cada lectura (abrir un cliente) parseaba todo — lento y con mucha RAM en
+// teléfonos de 3 GB. Ahora leer o guardar un cliente toca solo ese cliente.
+const PREFIJO_CLIENTE = 'COBROS_CLI_';
+
+// Migración única desde el formato viejo (un solo bloque): se reparte en
+// claves por cliente y se borra el bloque.
+let migracionClientes = null;
+const migrarCacheClientes = () => {
+  if (!migracionClientes) {
+    migracionClientes = (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(KEYS.clientes);
+        if (!raw) return;
+        const viejo = JSON.parse(raw);
+        const pares = Object.entries(viejo).map(([id, v]) => [PREFIJO_CLIENTE + id, JSON.stringify(v)]);
+        if (pares.length) await AsyncStorage.multiSet(pares);
+        await AsyncStorage.removeItem(KEYS.clientes);
+      } catch (e) {
+        console.warn('[cobrosOffline] migración de caché de clientes falló:', e?.message || e);
+      }
+    })();
+  }
+  return migracionClientes;
+};
+
 export const guardarClienteCache = async (clienteId, data) => {
-  const raw = await AsyncStorage.getItem(KEYS.clientes);
-  const cache = raw ? JSON.parse(raw) : {};
-  cache[clienteId] = { data, savedAt: Date.now() };
-  await AsyncStorage.setItem(KEYS.clientes, JSON.stringify(cache));
+  await migrarCacheClientes();
+  await AsyncStorage.setItem(PREFIJO_CLIENTE + clienteId, JSON.stringify({ data, savedAt: Date.now() }));
 };
 
 // Cuántos clientes tienen algún respaldo guardado en este teléfono ahora
@@ -71,22 +128,20 @@ export const guardarClienteCache = async (clienteId, data) => {
 // no están en la ruta, y contarlos todos hacía parecer que estaba completo
 // aunque a alguno de hoy le faltara.
 export const contarClientesConRespaldo = async (ids = null) => {
-  const raw = await AsyncStorage.getItem(KEYS.clientes);
-  if (!raw) return 0;
-  try {
-    const cache = JSON.parse(raw);
-    if (!Array.isArray(ids)) return Object.keys(cache).length;
-    return ids.filter((id) => cache[id] !== undefined).length;
-  } catch { return 0; }
+  await migrarCacheClientes();
+  if (!Array.isArray(ids)) {
+    const claves = await AsyncStorage.getAllKeys();
+    return claves.filter((k) => k.startsWith(PREFIJO_CLIENTE)).length;
+  }
+  const pares = await AsyncStorage.multiGet(ids.map((id) => PREFIJO_CLIENTE + id));
+  return pares.filter(([, v]) => v !== null).length;
 };
 
 export const leerClienteCache = async (clienteId) => {
-  const raw = await AsyncStorage.getItem(KEYS.clientes);
+  await migrarCacheClientes();
+  const raw = await AsyncStorage.getItem(PREFIJO_CLIENTE + clienteId);
   if (!raw) return null;
-  try {
-    const cache = JSON.parse(raw);
-    return cache[clienteId] || null;
-  } catch { return null; }
+  try { return JSON.parse(raw); } catch { return null; }
 };
 
 // Guarda el respaldo de VARIOS clientes de una sola vez (una sola lectura y
@@ -98,19 +153,36 @@ export const leerClienteCache = async (clienteId) => {
 // que unas pisan el resultado de otras y de paso se satura el
 // almacenamiento del teléfono. Aquí se hace UNA sola vez para todos.
 // No pisa el respaldo de un cliente que ya tenía uno guardado.
-export const guardarClientesCacheBatch = async (entradas) => {
+// Con { sobrescribir: true } SÍ reemplaza lo existente: lo usa la precarga
+// completa del día para dejar el detalle real (con productos y cuotas) y el
+// saldo actualizado, en vez de conservar el respaldo básico de ayer.
+export const guardarClientesCacheBatch = async (entradas, { sobrescribir = false } = {}) => {
   if (!entradas || entradas.length === 0) return;
-  const raw = await AsyncStorage.getItem(KEYS.clientes);
-  const cache = raw ? JSON.parse(raw) : {};
-  let huboCambios = false;
-  for (const { clienteId, data } of entradas) {
-    if (cache[clienteId]) continue;
-    cache[clienteId] = { data, savedAt: Date.now() };
-    huboCambios = true;
+  await migrarCacheClientes();
+  let aGuardar = entradas;
+  if (!sobrescribir) {
+    const existentes = await AsyncStorage.multiGet(entradas.map((e) => PREFIJO_CLIENTE + e.clienteId));
+    const yaTienen = new Set(existentes.filter(([, v]) => v !== null).map(([k]) => k));
+    aGuardar = entradas.filter((e) => !yaTienen.has(PREFIJO_CLIENTE + e.clienteId));
   }
-  if (huboCambios) {
-    await AsyncStorage.setItem(KEYS.clientes, JSON.stringify(cache));
-  }
+  if (aGuardar.length === 0) return;
+  const ahora = Date.now();
+  await AsyncStorage.multiSet(
+    aGuardar.map(({ clienteId, data }) => [PREFIJO_CLIENTE + clienteId, JSON.stringify({ data, savedAt: ahora })])
+  );
+};
+
+// ─── VEHÍCULOS DISPONIBLES (para vales de gasto) ─────────────────────────────
+// Sin esto, registrar un gasto de vehículo era imposible sin señal: la lista
+// de vehículos solo se pedía en línea.
+export const guardarVehiculosCache = async (lista) => {
+  await AsyncStorage.setItem(KEYS.vehiculos, JSON.stringify({ lista, fecha: fechaHoy() }));
+};
+
+export const leerVehiculosCache = async () => {
+  const raw = await AsyncStorage.getItem(KEYS.vehiculos);
+  if (!raw) return [];
+  try { return JSON.parse(raw).lista || []; } catch { return []; }
 };
 
 // ─── PAGOS PENDIENTES ────────────────────────────────────────────────────────
@@ -122,16 +194,17 @@ export const guardarClientesCacheBatch = async (entradas) => {
 // el servidor pero el teléfono no alcanzó a recibir la respuesta (timeout),
 // el reintento no crea un segundo cobro.
 export const encolarPago = async ({ id, clienteId, clienteNombre, ventaId, ventaNumero, numeroRecibo, monto, metodo, referencia, notas }) => {
-  const raw = await AsyncStorage.getItem(KEYS.pagos);
-  const cola = raw ? JSON.parse(raw) : [];
   const item = {
     id: id || `${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
     clienteId, clienteNombre, ventaId, ventaNumero, numeroRecibo,
     monto, metodo, referencia, notas,
     creadoEn: new Date().toISOString(),
   };
-  cola.push(item);
-  await AsyncStorage.setItem(KEYS.pagos, JSON.stringify(cola));
+  await conBloqueo(KEYS.pagos, async () => {
+    const cola = await leerArreglo(KEYS.pagos);
+    cola.push(item);
+    await AsyncStorage.setItem(KEYS.pagos, JSON.stringify(cola));
+  });
   // Bitácora aparte, fuera del almacenamiento privado de la app — sobrevive
   // aunque se desinstale antes de que este cobro llegue al servidor.
   backupOffline.registrarPendiente({
@@ -142,16 +215,35 @@ export const encolarPago = async ({ id, clienteId, clienteNombre, ventaId, venta
   return item;
 };
 
-export const leerPagosPendientes = async () => {
-  const raw = await AsyncStorage.getItem(KEYS.pagos);
-  if (!raw) return [];
-  try { return JSON.parse(raw); } catch { return []; }
+export const leerPagosPendientes = async () => leerArreglo(KEYS.pagos);
+
+export const eliminarPago = (id) => conBloqueo(KEYS.pagos, async () => {
+  const cola = await leerArreglo(KEYS.pagos);
+  await AsyncStorage.setItem(KEYS.pagos, JSON.stringify(cola.filter(p => p.id !== id)));
+});
+
+// ─── COBROS RECHAZADOS POR EL SERVIDOR ───────────────────────────────────────
+// Un 4xx real (monto inválido, venta ya saldada, sin permiso...) ya no se borra
+// en silencio: queda aquí con el motivo para que el cobrador lo vea y avise.
+export const leerPagosRechazados = async () => leerArreglo(KEYS.rechazados);
+
+const moverARechazados = (pago, motivo, statusCode) => conBloqueo(KEYS.rechazados, async () => {
+  const lista = await leerArreglo(KEYS.rechazados);
+  if (!lista.some(r => r.id === pago.id)) {
+    lista.push({ ...pago, motivo, statusCode, rechazadoEn: new Date().toISOString() });
+    await AsyncStorage.setItem(KEYS.rechazados, JSON.stringify(lista));
+  }
+});
+
+export const descartarPagosRechazados = async () => {
+  await AsyncStorage.removeItem(KEYS.rechazados);
 };
 
-export const eliminarPago = async (id) => {
-  const raw = await AsyncStorage.getItem(KEYS.pagos);
-  const cola = raw ? JSON.parse(raw) : [];
-  await AsyncStorage.setItem(KEYS.pagos, JSON.stringify(cola.filter(p => p.id !== id)));
+// Errores que NO son de datos y se reintentan: sin respuesta, 5xx, 401 (la
+// sesión venció — al volver a iniciar sesión el cobro sí es válido), 408 y 429.
+export const esErrorReintentable = (e) => {
+  const st = e?.response?.status;
+  return !e?.response || st >= 500 || st === 401 || st === 408 || st === 429;
 };
 
 export const contarPagosPendientes = async () => {
@@ -174,8 +266,6 @@ export const guardarEnHistorial = async ({
   proximaVisitaFecha = null, pagoOfflineId = null,
   saldoAntes = null, saldoDespues = null,
 }) => {
-  const raw = await AsyncStorage.getItem(KEYS.historial);
-  const historial = raw ? JSON.parse(raw) : [];
   const item = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     tipo,
@@ -197,9 +287,12 @@ export const guardarEnHistorial = async ({
     resultado,
     ...(pagoOfflineId && { pagoOfflineId }),
   };
-  historial.unshift(item); // más reciente primero
-  // Mantener máximo 200 registros
-  await AsyncStorage.setItem(KEYS.historial, JSON.stringify(historial.slice(0, 200)));
+  await conBloqueo(KEYS.historial, async () => {
+    const historial = await leerArreglo(KEYS.historial);
+    historial.unshift(item); // más reciente primero
+    // Mantener máximo 200 registros
+    await AsyncStorage.setItem(KEYS.historial, JSON.stringify(historial.slice(0, 200)));
+  });
   return item;
 };
 
@@ -213,9 +306,8 @@ export const leerHistorial = async () => {
 // Evita duplicados en el historial al sincronizar pagos guardados sin conexión.
 // También reemplaza el numeroRecibo TEMPORAL (generado local al momento del cobro
 // offline) por el correlativo real que asigna el servidor, ligado al cobrador.
-const actualizarHistorialOffline = async (pagoId, respuestaServidor) => {
-  const raw = await AsyncStorage.getItem(KEYS.historial);
-  const historial = raw ? JSON.parse(raw) : [];
+const actualizarHistorialOffline = (pagoId, respuestaServidor) => conBloqueo(KEYS.historial, async () => {
+  const historial = await leerArreglo(KEYS.historial);
   // Busca el registro offline que corresponde a este pago por su id de cola
   const idx = historial.findIndex(h => h.pagoOfflineId === pagoId);
   if (idx !== -1) {
@@ -230,7 +322,7 @@ const actualizarHistorialOffline = async (pagoId, respuestaServidor) => {
     await AsyncStorage.setItem(KEYS.historial, JSON.stringify(historial));
   }
   // Si no encuentra el registro (ej: historial borrado), no hace nada — no duplica
-};
+});
 
 export const leerHistorialCliente = async (clienteId) => {
   const todos = await leerHistorial();
@@ -255,21 +347,26 @@ export const leerOrdenClientes = async () => {
 // sin abono), para que el cobrador vea solo a quién le falta visitar. Se
 // reinicia automáticamente al cambiar de día.
 
-export const marcarClienteVisitado = async (clienteId) => {
+export const marcarClienteVisitado = (clienteId) => conBloqueo(KEYS.visitados, async () => {
   const raw = await AsyncStorage.getItem(KEYS.visitados);
-  let store = raw ? JSON.parse(raw) : null;
+  let store = null;
+  try { store = raw ? JSON.parse(raw) : null; } catch { store = null; }
   if (!store || store.fecha !== fechaHoy()) store = { fecha: fechaHoy(), ids: [] };
   if (!store.ids.includes(clienteId)) store.ids.push(clienteId);
   await AsyncStorage.setItem(KEYS.visitados, JSON.stringify(store));
-};
+});
 
 // Borra toda la caché offline del cobrador — llamar al hacer logout
 // para que el siguiente usuario no vea datos del anterior.
 // NO borra pagos pendientes de envío (COBROS_PAGOS_PENDIENTES) para no perder
 // cobros que aún no se sincronizaron.
 export const limpiarCacheOffline = async () => {
+  const claves = await AsyncStorage.getAllKeys();
+  const deClientes = claves.filter((k) => k.startsWith(PREFIJO_CLIENTE));
   await AsyncStorage.multiRemove([
+    ...deClientes,
     KEYS.ruta,
+    KEYS.vehiculos,
     KEYS.clientes,
     KEYS.historial,
     KEYS.orden,
@@ -346,16 +443,18 @@ const _sincronizarPagosPendientesInterno = async (api) => {
       // transitorio, no es un error de datos. Detener y reintentar todo
       // en el próximo sync — NO eliminar el cobro de la cola, o se pierde.
       const statusNum = e.response?.status;
-      const esTransitorio = !e.response || (statusNum && statusNum >= 500);
-      if (esTransitorio) {
-        console.log(`🛑 Problema de conexión o servidor caído (${statusNum || 'sin respuesta'}), deteniendo sync de cobros`);
+      // Incluye 401: con la sesión vencida TODOS los cobros pendientes
+      // fallarían con 401 y antes se borraban uno por uno de la cola.
+      if (esErrorReintentable(e)) {
+        console.log(`🛑 Problema de conexión, sesión o servidor (${statusNum || 'sin respuesta'}), deteniendo sync de cobros`);
         break;
       }
-      // Error 4xx del servidor (validación, permisos) → sí es un error
-      // real de datos, reintentarlo no lo va a arreglar. Eliminar de la
-      // cola para que no bloquee los demás cobros pendientes.
+      // Error 4xx real de datos (validación, permisos, venta ya saldada):
+      // reintentarlo no lo arregla y no debe bloquear los demás cobros, pero
+      // TAMPOCO se borra en silencio — pasa a "rechazados" con el motivo.
       console.warn(`⚠️ Error servidor en cobro ${pago.id}:`, e.message);
-      errores.push({ id: pago.id, cliente: pago.clienteNombre, error: e.message });
+      errores.push({ id: pago.id, cliente: pago.clienteNombre, monto: pago.monto, error: e.message });
+      await moverARechazados(pago, e.message, statusNum);
       await eliminarPago(pago.id);
     }
   }

@@ -43,15 +43,24 @@ export default function EncuestaClienteScreen({ route, navigation }) {
   const [resultado, setResultado] = useState(null);
   const [observaciones, setObservaciones] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [errorClientes, setErrorClientes] = useState('');
 
   useEffect(() => {
     (async () => {
-      if (!isOnline) { setCargandoClientes(false); return; }
+      setErrorClientes('');
+      if (!isOnline) {
+        // Antes quedaba "Sin resultados" sin explicar que era por falta de señal.
+        setErrorClientes('Sin conexión: necesitas internet para elegir al cliente de la ruta.');
+        setCargandoClientes(false);
+        return;
+      }
       try {
         const { data } = await api.get(`/cobros/rutas/${rutaId}/clientes`, { timeout: TIMEOUT_LECTURA_CACHE });
         setClientes(data.clientes || data || []);
       } catch (e) {
-        Alert.alert('Error', 'No se pudieron cargar los clientes de la ruta.');
+        console.warn('[Encuesta] clientes de la ruta:', e?.message || e);
+        setErrorClientes(`No se pudieron cargar los clientes de la ruta.
+${e?.message || e}`);
       } finally {
         setCargandoClientes(false);
       }
@@ -77,6 +86,12 @@ export default function EncuestaClienteScreen({ route, navigation }) {
     if (!resultado) {
       Alert.alert('Falta el resultado', 'Elegí qué se encontró al verificar (coincide, diferencia, etc.).');
       return;
+    }
+    for (const [valor, nombre] of [[ultimoPagoMonto, 'Último pago'], [saldoInformado, 'Saldo informado']]) {
+      if (valor && (!Number.isFinite(parseFloat(valor)) || parseFloat(valor) < 0)) {
+        Alert.alert('Monto inválido', `"${nombre}" debe ser un número válido (ej. 12.50). Valor ingresado: "${valor}"`);
+        return;
+      }
     }
     setSubmitting(true);
     const payload = {
@@ -117,7 +132,7 @@ export default function EncuestaClienteScreen({ route, navigation }) {
           );
         } catch (e) {
           if (esErrorTransitorio(e)) await guardarOffline();
-          else Alert.alert('Error', e?.response?.data?.mensaje || 'No se pudo registrar la encuesta.');
+          else Alert.alert('Error', e?.message || 'No se pudo registrar la encuesta.');
         }
       } else {
         await guardarOffline();
@@ -175,7 +190,7 @@ export default function EncuestaClienteScreen({ route, navigation }) {
                     <Text style={{ fontSize: 18, color: '#ccc' }}>›</Text>
                   </TouchableOpacity>
                 )}
-                ListEmptyComponent={<Text style={{ color: '#888', textAlign: 'center', marginTop: 30 }}>Sin resultados</Text>}
+                ListEmptyComponent={<Text style={{ color: errorClientes ? '#e53e3e' : '#888', textAlign: 'center', marginTop: 30 }}>{errorClientes || 'Sin resultados'}</Text>}
               />
             )}
           </>

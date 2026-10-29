@@ -37,7 +37,7 @@ export default function PerfilClienteScreen({ route, navigation }) {
       const { data: resp } = await api.get(`/cobros/clientes/${clienteId}/perfil`, { timeout: TIMEOUT_LECTURA_CACHE });
       setData(resp);
     } catch (e) {
-      setError(e?.response?.data?.message || 'No se pudo cargar el perfil del cliente.');
+      setError(e?.message || 'No se pudo cargar el perfil del cliente.');
     } finally {
       setLoading(false);
     }

@@ -55,6 +55,7 @@ export default function RegistrarPreventaScreen({ navigation }) {
       const { data } = await api.get(`/clientes?${qs}`, timeoutConfig);
       setClientes(Array.isArray(data) ? data : (data.data || []));
     } catch (e) {
+      console.warn("[Preventa] buscar clientes:", e?.message || e);
       if (esErrorTransitorio(e)) {
         const locales = await localDb.searchLocalClients(q);
         setClientes(Array.isArray(locales) ? locales : []);
@@ -83,7 +84,7 @@ export default function RegistrarPreventaScreen({ navigation }) {
       const lista = Array.isArray(data) ? data : (data.data || []);
       setProductos(lista);
     } catch (e) {
-      if (!esErrorTransitorio(e)) setProductos([]);
+      console.warn("[Preventa] cargar productos:", e?.message || e); if (!esErrorTransitorio(e)) setProductos([]);
       // Sin conexión no hay catálogo local para preventas — se avisa en la UI vacía
     } finally {
       setBuscandoProducto(false);
@@ -173,7 +174,7 @@ export default function RegistrarPreventaScreen({ navigation }) {
           );
         } catch (e) {
           if (esErrorTransitorio(e)) await guardarOffline();
-          else Alert.alert('Error', e?.response?.data?.message || 'No se pudo registrar la preventa.');
+          else Alert.alert('Error', e?.message || 'No se pudo registrar la preventa.');
         }
       } else {
         await guardarOffline();

@@ -12,6 +12,7 @@ import {
   guardarOrdenClientes, leerOrdenClientes, leerClientesVisitadosHoy,
   guardarClientesCacheBatch,
 } from '../services/cobrosOffline';
+import { avisarRechazados } from '../services/rechazados';
 import { useBusquedaPorVoz } from '../hooks/useBusquedaPorVoz';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
@@ -111,7 +112,6 @@ export default function CobrosScreen({ navigation }) {
         setRutas(data.rutas || []);
         if ((data.rutas||[]).length === 1) setRutaId(data.rutas[0].id);
         setEsCache(false);
-        setCacheVieja(false);
         // No se espera (no-await) — no debe retrasar que la pantalla muestre
         // la ruta; corre en segundo plano.
         precachearClientesDeRuta(data.rutas);
@@ -119,6 +119,7 @@ export default function CobrosScreen({ navigation }) {
         if (pendientes > 0) {
           const result = await sincronizarPagosPendientes(api);
           console.log(`🔄 Cobros sincronizados: ${result.synced}/${result.total}`);
+          if (result.errores?.length) avisarRechazados();
         }
       } else {
         const cache = await leerRutaCache();
@@ -259,7 +260,7 @@ export default function CobrosScreen({ navigation }) {
     try {
       const { data } = await api.get('/cobros/clientes/buscar', { params: { codigo: query.trim() } });
       setResultadosGlobal(data.clientes || []);
-    } catch {
+    } catch (e) { console.warn("[Cobros] búsqueda global:", e?.message || e);
       setResultadosGlobal([]);
     } finally {
       setBuscandoGlobal(false);
@@ -581,6 +582,12 @@ export default function CobrosScreen({ navigation }) {
             data={lista}
             keyExtractor={i => String(i.id)}
             renderItem={renderItem}
+            // Ruta de 80-130 clientes en teléfonos de 3 GB de RAM: renderizar solo
+            // lo visible (+ un poco de margen) y liberar lo que sale de pantalla.
+            initialNumToRender={10}
+            maxToRenderPerBatch={8}
+            windowSize={7}
+            removeClippedSubviews={Platform.OS === 'android'}
             contentContainerStyle={{paddingHorizontal:16,paddingBottom:32}}
             showsVerticalScrollIndicator={false}
             refreshControl={

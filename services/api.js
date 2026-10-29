@@ -1,5 +1,6 @@
 import axios from 'axios';
 import Constants from 'expo-constants';
+import { addDebugLog } from './debugLog';
 
 const envUrl = process.env.EXPO_PUBLIC_API_URL;
 const manifestUrl = Constants.manifest?.extra?.EXPO_PUBLIC_API_URL;
@@ -60,6 +61,21 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+const endpointDe = (error) =>
+  `${(error.config?.method || 'get').toUpperCase()} ${error.config?.url || '?'}`;
+
+// Cada fallo queda en el registro de depuración (visible en Diagnóstico) sin
+// bloquear el flujo: un 401 del ping de conectividad sin sesión es ruido.
+const registrarFalloApi = (error, estado, mensaje) => {
+  if (estado === 401 && !_token) return;
+  // El ping de /me y el heartbeat fallan cada pocos segundos sin red; se
+  // registrarían cientos de veces y taparían los errores útiles.
+  const url = error.config?.url || '';
+  if (estado === 'red' && (url === '/me' || url.includes('heartbeat'))) return;
+  console.warn('[API]', endpointDe(error), '→', estado, mensaje);
+  addDebugLog(`API ${endpointDe(error)} → ${estado}`, { mensaje: String(mensaje).slice(0, 400) });
+};
+
 api.interceptors.response.use(
   (response) => {
     // Un request que sí completó demuestra que hay conexión — recupera el
@@ -71,19 +87,39 @@ api.interceptors.response.use(
     if (error.response) {
       // Error del servidor (4xx, 5xx) — preservar .response para que offlineQueue distinga
       if (error.response.status >= 500) _onTransitorio?.(true);
-      if (error.response.status === 401 && !error.config?.url?.includes('/login')) {
+      // Solo cuenta como sesión expirada si el request llevaba token: el ping
+      // de ConnectivityProvider golpea /me sin sesión y ese 401 es esperado.
+      if (error.response.status === 401 && _token && !error.config?.url?.includes('/login')) {
         _onSesionExpirada?.();
       }
-      const msg = error.response.data?.message || `Error ${error.response.status}`;
+      const { status, data } = error.response;
+      // El backend responde { message } (Laravel/validación) o { mensaje } (la mayoría
+      // de los controladores propios) o { error }: se aceptan los tres.
+      const base = data?.message || data?.mensaje || (typeof data?.error === 'string' ? data.error : null) || `Error ${status}`;
+      // Laravel 422: { message, errors: { campo: [msgs] } } — se muestra cada
+      // campo inválido en vez de solo "The given data was invalid".
+      const campos = data?.errors && typeof data.errors === 'object'
+        ? Object.values(data.errors).flat().filter(Boolean)
+        : [];
+      let msg = campos.length ? `${base}\n• ${campos.join('\n• ')}` : base;
+      // Para 5xx el mensaje del servidor no dice dónde ocurrió — se agrega
+      // el endpoint y el código HTTP para poder ubicar el fallo.
+      if (status >= 500) msg += `\n(HTTP ${status} en ${endpointDe(error)})`;
+      else if (base === `Error ${status}`) msg += ` en ${endpointDe(error)}`;
       const serverError = new Error(msg);
       serverError.response = error.response; // IMPORTANTE: preservar response
+      serverError.status = status;
+      serverError.campos = data?.errors || null;
+      registrarFalloApi(error, status, msg);
       return Promise.reject(serverError);
     }
     _onTransitorio?.(true);
-    if (error.code === 'ECONNABORTED') {
-      return Promise.reject(new Error('Tiempo de espera agotado'));
-    }
-    return Promise.reject(new Error('Sin conexión con el servidor'));
+    const detalleRed = `${endpointDe(error)}\nURL base: ${BASE_URL}`;
+    const netError = error.code === 'ECONNABORTED'
+      ? new Error(`Tiempo de espera agotado\n${detalleRed}`)
+      : new Error(`Sin conexión con el servidor\n${detalleRed}`);
+    registrarFalloApi(error, 'red', netError.message);
+    return Promise.reject(netError);
   }
 );
 

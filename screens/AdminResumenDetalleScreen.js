@@ -37,6 +37,8 @@ export default function AdminResumenDetalleScreen({ navigation, route }) {
   const [filtroSel, setFiltroSel] = useState(null); // {id, nombre} | null = Todos
   const [opciones, setOpciones] = useState([]);
   const [modalFiltro, setModalFiltro] = useState(false);
+  const [cargandoOpciones, setCargandoOpciones] = useState(false);
+  const [errorOpciones, setErrorOpciones] = useState('');
 
   const cargar = useCallback(async () => {
     if (!isOnline) {
@@ -52,10 +54,11 @@ export default function AdminResumenDetalleScreen({ navigation, route }) {
       const res = await api.get(cfg.endpoint, { params, timeout: TIMEOUT_LECTURA_CACHE });
       setDatos(res.data);
     } catch (e) {
+      console.warn('[AdminResumenDetalle] cargar:', e?.message || e);
       setError(
         e?.response?.status === 403
           ? 'Tu cuenta no tiene permiso de super admin.'
-          : 'No se pudo cargar el detalle.'
+          : `No se pudo cargar el detalle.\n${e?.message || e}`
       );
     } finally {
       setLoading(false);
@@ -67,10 +70,18 @@ export default function AdminResumenDetalleScreen({ navigation, route }) {
   const abrirFiltro = async () => {
     setModalFiltro(true);
     if (opciones.length === 0 && cfg.filtro) {
+      setCargandoOpciones(true);
+      setErrorOpciones('');
       try {
         const res = await api.get(ENDPOINT_OPCIONES[cfg.filtro.tipo], { timeout: TIMEOUT_LECTURA_CACHE });
-        setOpciones(res.data);
-      } catch (_) {}
+        setOpciones(Array.isArray(res.data) ? res.data : []);
+      } catch (e) {
+        console.warn('[AdminResumenDetalleScreen] opciones de filtro:', e?.message || e);
+        // Antes el modal quedaba con el spinner girando para siempre.
+        setErrorOpciones(e?.message || 'No se pudo cargar la lista.');
+      } finally {
+        setCargandoOpciones(false);
+      }
     }
   };
 
@@ -123,7 +134,11 @@ export default function AdminResumenDetalleScreen({ navigation, route }) {
                 <Text style={[s.opcionTxt, !filtroSel && { color: cfg.color, fontWeight: '800' }]}>Todos</Text>
               </TouchableOpacity>
               {opciones.length === 0
-                ? <ActivityIndicator size="small" color={cfg.color} style={{ marginVertical: 16 }} />
+                ? (cargandoOpciones
+                  ? <ActivityIndicator size="small" color={cfg.color} style={{ marginVertical: 16 }} />
+                  : <Text style={{ color: errorOpciones ? '#e53e3e' : '#888', textAlign: 'center', marginVertical: 16 }}>
+                      {errorOpciones || 'No hay opciones disponibles.'}
+                    </Text>)
                 : opciones.map((o) => (
                   <TouchableOpacity key={o.id} style={s.opcionRow} onPress={() => elegirFiltro(o)}>
                     <Text style={[s.opcionTxt, filtroSel?.id === o.id && { color: cfg.color, fontWeight: '800' }]}>{o.nombre}</Text>

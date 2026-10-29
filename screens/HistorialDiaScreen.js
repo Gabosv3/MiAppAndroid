@@ -221,7 +221,7 @@ export default function HistorialDiaScreen({ navigation }) {
           setEsCache(false);
           setLoading(false);
           return;
-        } catch {
+        } catch (e) { console.warn("[HistorialDia] servidor falló, usando local:", e?.message || e);
           // Si falla la petición (ej. endpoint caído), cae al local
         }
       }

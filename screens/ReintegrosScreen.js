@@ -38,7 +38,7 @@ export default function ReintegrosScreen({ navigation }) {
       const { data } = await api.get('/reintegros', { params: { estado: filtro, per_page: 50 } });
       setItems(data.data || []);
     } catch (e) {
-      Alert.alert('Error', e?.response?.data?.message || 'No se pudieron cargar los reintegros');
+      Alert.alert('Error', e?.message || 'No se pudieron cargar los reintegros');
     } finally {
       setLoading(false);
     }
@@ -57,7 +57,7 @@ export default function ReintegrosScreen({ navigation }) {
       setObs('');
       await cargar();
     } catch (e) {
-      Alert.alert('Error', e?.response?.data?.message || 'No se pudo actualizar');
+      Alert.alert('Error', e?.message || 'No se pudo actualizar');
     } finally {
       setSaving(false);
     }

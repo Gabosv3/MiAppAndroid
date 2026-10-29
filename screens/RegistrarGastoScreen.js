@@ -8,6 +8,7 @@ import * as ImagePicker from 'expo-image-picker';
 import api, { esErrorTransitorio, TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
+import { guardarVehiculosCache, leerVehiculosCache } from '../services/cobrosOffline';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const CATEGORIAS_VEHICULO = [
@@ -30,13 +31,21 @@ export default function RegistrarGastoScreen({ navigation }) {
   const [categoriaVehiculo, setCategoriaVehiculo] = useState(null);
 
   const cargarVehiculos = useCallback(async () => {
-    if (!isOnline) return;
     setLoadingVehiculos(true);
     try {
+      if (!isOnline) {
+        setVehiculos(await leerVehiculosCache());
+        return;
+      }
       const { data } = await api.get('/vehiculos/disponibles', { timeout: TIMEOUT_LECTURA_CACHE });
-      setVehiculos(Array.isArray(data) ? data : []);
-    } catch { setVehiculos([]); }
-    finally { setLoadingVehiculos(false); }
+      const lista = Array.isArray(data) ? data : [];
+      setVehiculos(lista);
+      guardarVehiculosCache(lista).catch(() => {});
+    } catch (e) {
+      console.warn('[Gasto] vehículos:', e?.message || e);
+      // Falló la red a mitad de camino: se usa la última lista guardada.
+      setVehiculos(await leerVehiculosCache().catch(() => []));
+    } finally { setLoadingVehiculos(false); }
   }, [isOnline]);
 
   useFocusEffect(useCallback(() => { if (tipo === 'vehiculo') cargarVehiculos(); }, [tipo, cargarVehiculos]));
@@ -138,7 +147,7 @@ export default function RegistrarGastoScreen({ navigation }) {
           } else if (esErrorTransitorio(e)) {
             await guardarOffline();
           } else {
-            Alert.alert('Error', e?.response?.data?.message || e?.message || 'No se pudo enviar el vale.');
+            Alert.alert('Error', e?.message || 'No se pudo enviar el vale.');
           }
         }
       } else {

@@ -104,7 +104,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
     try {
       const { data } = await api.get(`/clientes/${clienteId}/grupo`, { timeout: TIMEOUT_LECTURA_CACHE });
       setGrupo(data);
-    } catch { /* silencioso, sección opcional */ }
+    } catch (e) { console.warn("[DetalleCliente] grupo (opcional):", e?.message || e); }
     finally { setLoadingGrupo(false); }
   }, [clienteId, isOnline]);
 
@@ -117,7 +117,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
       const { data } = await api.get('/cobros/clientes/buscar', { params: { codigo: texto.trim() } });
       const lista = Array.isArray(data) ? data : (data.clientes || []);
       setResultadosVinc(lista.filter(c => c.id !== clienteId));
-    } catch { setResultadosVinc([]); }
+    } catch (e) { console.warn("[DetalleCliente] buscar vinculables:", e?.message || e); setResultadosVinc([]); }
     finally { setBuscandoVinc(false); }
   }, [clienteId]);
 
@@ -149,7 +149,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
         setResultadosVinc([]);
         Alert.alert('📴 Guardado sin conexión', 'La vinculación se aplicará cuando recuperes la señal.');
       } else {
-        Alert.alert('Error', e?.response?.data?.message || 'No se pudo vincular.');
+        Alert.alert('Error', e?.message || 'No se pudo vincular.');
       }
     } finally {
       setVinculando(false);
@@ -179,7 +179,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
             }
           } catch (e) {
             if (esErrorTransitorio(e)) await encolar();
-            else Alert.alert('Error', e?.response?.data?.message || 'No se pudo desvincular.');
+            else Alert.alert('Error', e?.message || 'No se pudo desvincular.');
           }
         }},
       ]
@@ -252,7 +252,24 @@ export default function DetalleClienteScreen({ navigation, route }) {
   // ella específicamente (no un reparto automático) — mismo endpoint y misma
   // lógica de próxima visita/método que usa el cobro individual normal.
   const abonarATodasLasCuentas = async (cuentasAPagar) => {
+    // try/finally: si algo truena a media aplicación (ej. el almacenamiento
+    // del teléfono falla al encolar), antes el spinner quedaba girando para
+    // siempre y el cobrador no sabía cuáles cuentas sí se habían cobrado.
     setProcesandoAbono(true);
+    try {
+      await abonarInterno(cuentasAPagar);
+    } catch (e) {
+      console.warn('[DetalleCliente] abono grupal falló a media aplicación:', e?.message || e);
+      Alert.alert(
+        'El abono no terminó de aplicarse',
+        `${e?.message || e}\n\nRevisa el historial del día: algunas cuentas pueden haberse cobrado ya. No repitas el abono completo sin verificar.`
+      );
+    } finally {
+      setProcesandoAbono(false);
+    }
+  };
+
+  const abonarInterno = async (cuentasAPagar) => {
     const aplicados = []; // líneas que sí se cobraron, para el recibo consolidado
     let huboOffline = false;
     const proxVisita = calcProximaVisitaGrupo();
@@ -293,7 +310,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
             await marcarClienteVisitado(cta.cliente_id);
             resultadoVisita = { ok: true, offline: false };
           } catch (e) {
-            resultadoVisita = esErrorTransitorio(e) ? await encolarVisitaLocal() : { ok: false, offline: false };
+            resultadoVisita = esErrorTransitorio(e) ? await encolarVisitaLocal() : { ok: false, offline: false, motivo: e?.message || String(e) };
           }
         }
 
@@ -308,6 +325,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
           numeroRecibo: null,
           sinPago: true,
           ok: resultadoVisita.ok,
+          motivo: resultadoVisita.motivo,
         });
         continue;
       }
@@ -354,7 +372,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
           });
           resultado = { numeroRecibo: data?.numero_recibo || null, ok: true, offline: false };
         } catch (e) {
-          resultado = esErrorTransitorio(e) ? await encolarLocal() : { ok: false, offline: false };
+          resultado = esErrorTransitorio(e) ? await encolarLocal() : { ok: false, offline: false, motivo: e?.message || String(e) };
         }
       }
 
@@ -368,10 +386,10 @@ export default function DetalleClienteScreen({ navigation, route }) {
         saldoDespues: Math.max(0, cta.saldo - aPagar),
         numeroRecibo: resultado.numeroRecibo || null,
         ok: resultado.ok,
+        motivo: resultado.motivo,
       });
     }
 
-    setProcesandoAbono(false);
     setModalAbonoGrupo(false);
     await cargarGrupo(); // no-op si está offline
     await cargar(); // ya maneja su propio fallback a caché si está offline
@@ -389,6 +407,14 @@ export default function DetalleClienteScreen({ navigation, route }) {
       });
     } else {
       Alert.alert('Sin aplicar', 'No se pudo aplicar el abono a ninguna cuenta.');
+    }
+
+    const fallidas = aplicados.filter(a => !a.ok);
+    if (fallidas.length > 0) {
+      Alert.alert(
+        `${fallidas.length} cuenta(s) NO se aplicaron`,
+        fallidas.map(a => `• ${a.clienteNombre} (${a.sinPago ? 'visita' : fmt(a.monto)}): ${a.motivo || 'error desconocido'}`).join('\n')
+      );
     }
   };
 
@@ -571,7 +597,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
       }
     } catch (e) {
       if (esErrorTransitorio(e)) await encolar();
-      else Alert.alert('Error', e?.response?.data?.message || 'No se pudo actualizar');
+      else Alert.alert('Error', e?.message || 'No se pudo actualizar');
     } finally {
       setSavingTel(false);
     }
@@ -604,7 +630,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
       }
     } catch (e) {
       if (esErrorTransitorio(e)) await encolar();
-      else Alert.alert('Error', e?.response?.data?.message || 'No se pudo crear el reintegro');
+      else Alert.alert('Error', e?.message || 'No se pudo crear el reintegro');
     } finally {
       setSavingRei(false);
     }
@@ -661,7 +687,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
       }
     } catch (e) {
       if (esErrorTransitorio(e)) await encolar();
-      else Alert.alert('Error', e?.response?.data?.message || 'No se pudo reportar la garantía');
+      else Alert.alert('Error', e?.message || 'No se pudo reportar la garantía');
     } finally {
       setSavingGar(false);
     }
@@ -723,7 +749,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
       }
     } catch (e) {
       if (esErrorTransitorio(e)) await encolar();
-      else Alert.alert('Error', e?.response?.data?.message || 'No se pudo actualizar el nombre.');
+      else Alert.alert('Error', e?.message || 'No se pudo actualizar el nombre.');
     } finally {
       setSavingNombre(false);
     }

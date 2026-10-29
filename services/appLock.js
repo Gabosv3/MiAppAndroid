@@ -28,9 +28,43 @@ export const setPin = async (pin) => {
   await SecureStore.setItemAsync(PIN_KEY, pin);
 };
 
+// Límite de intentos: un PIN de 4 dígitos son solo 10.000 combinaciones y
+// antes se podían probar todas sin ninguna espera. Tras 5 fallos seguidos se
+// bloquea 30 s, y cada nueva tanda de 5 duplica la espera (tope 15 min). El
+// contador persiste: cerrar y abrir la app no lo reinicia.
+const FALLOS_KEY = 'app_pin_fallos';
+const MAX_FALLOS = 5;
+const ESPERA_BASE_MS = 30 * 1000;
+const ESPERA_MAX_MS = 15 * 60 * 1000;
+
+const leerFallos = async () => {
+  try {
+    const raw = await AsyncStorage.getItem(FALLOS_KEY);
+    return raw ? JSON.parse(raw) : { n: 0, hasta: 0 };
+  } catch { return { n: 0, hasta: 0 }; }
+};
+
+export const bloqueoRestanteSeg = async () => {
+  const { hasta } = await leerFallos();
+  return hasta > Date.now() ? Math.ceil((hasta - Date.now()) / 1000) : 0;
+};
+
 export const verifyPin = async (pin) => {
+  if ((await bloqueoRestanteSeg()) > 0) return false;
   const guardado = await SecureStore.getItemAsync(PIN_KEY);
-  return !!guardado && guardado === pin;
+  const ok = !!guardado && guardado === pin;
+  if (ok) {
+    await AsyncStorage.removeItem(FALLOS_KEY).catch(() => {});
+    return true;
+  }
+  const { n } = await leerFallos();
+  const nuevos = n + 1;
+  const tandas = Math.floor(nuevos / MAX_FALLOS);
+  const hasta = nuevos % MAX_FALLOS === 0
+    ? Date.now() + Math.min(ESPERA_BASE_MS * 2 ** (tandas - 1), ESPERA_MAX_MS)
+    : 0;
+  await AsyncStorage.setItem(FALLOS_KEY, JSON.stringify({ n: nuevos, hasta })).catch(() => {});
+  return false;
 };
 
 export const removePin = async () => {

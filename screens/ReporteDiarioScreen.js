@@ -65,7 +65,7 @@ export default function ReporteDiarioScreen({ navigation }) {
             monto: it.monto || 0,
             resultado: it.resultado || null,
           }));
-        } catch { /* cae al local */ }
+        } catch (e) { console.warn("[ReporteDiario] servidor falló, usando local:", e?.message || e); }
       }
       if (items.length === 0) {
         const todos = await leerHistorial();

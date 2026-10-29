@@ -26,7 +26,7 @@ export default function DesempenoCobradoresScreen({ navigation }) {
       const { data } = await api.get('/cobros/supervisor/desempeno-cobradores', { timeout: TIMEOUT_LECTURA_CACHE });
       setCobradores(data.cobradores || []);
     } catch (e) {
-      setError(e?.response?.data?.mensaje || 'No se pudo cargar el desempeño.');
+      setError(e?.message || 'No se pudo cargar el desempeño.');
     } finally {
       setLoading(false);
     }

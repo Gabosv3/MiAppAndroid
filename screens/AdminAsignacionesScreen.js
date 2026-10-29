@@ -28,6 +28,9 @@ export default function AdminAsignacionesScreen({ navigation }) {
   const [cargandoModal, setCargandoModal] = useState(false);
 
   const [vendedores, setVendedores] = useState([]);
+  const [cargandoListas, setCargandoListas] = useState(false);
+  const [errorListas, setErrorListas] = useState('');
+  const [errorProductos, setErrorProductos] = useState('');
   const [vendedorSel, setVendedorSel] = useState(null);
 
   const [categorias, setCategorias] = useState([]);
@@ -67,13 +70,17 @@ export default function AdminAsignacionesScreen({ navigation }) {
   // ── Catálogo: se recarga cada vez que cambia búsqueda o categoría ──────
   const cargarProductos = useCallback(async (texto, categoriaId) => {
     setCargandoProductos(true);
+    setErrorProductos('');
     try {
       const res = await api.get('/admin/productos-catalogo', {
         params: { buscar: texto || undefined, categoria_id: categoriaId || undefined },
         timeout: TIMEOUT_LECTURA_CACHE,
       });
-      setProductos(res.data);
-    } catch (_) {} finally {
+      setProductos(Array.isArray(res.data) ? res.data : []);
+    } catch (e) {
+      console.warn('[AdminAsignacionesScreen] catálogo:', e?.message || e);
+      setErrorProductos(e?.message || 'No se pudo cargar el catálogo.');
+    } finally {
       setCargandoProductos(false);
     }
   }, []);
@@ -115,8 +122,8 @@ export default function AdminAsignacionesScreen({ navigation }) {
         cantidad_asignada: String(x.cantidad_asignada),
         precio_venta: String(x.precio_venta),
       })));
-    } catch (_) {
-      Alert.alert('Error', 'No se pudo cargar la asignación.');
+    } catch (e) {
+      Alert.alert('No se pudo cargar la asignación', String(e?.message || e));
       setModalVisible(false);
     } finally {
       setCargandoModal(false);
@@ -124,14 +131,23 @@ export default function AdminAsignacionesScreen({ navigation }) {
   };
 
   const cargarListasBase = async () => {
+    setCargandoListas(true);
+    setErrorListas('');
     try {
       const [resV, resC] = await Promise.all([
         vendedores.length === 0 ? api.get('/admin/vendedores', { timeout: TIMEOUT_LECTURA_CACHE }) : Promise.resolve({ data: vendedores }),
         categorias.length === 0 ? api.get('/admin/categorias', { timeout: TIMEOUT_LECTURA_CACHE }) : Promise.resolve({ data: categorias }),
       ]);
-      setVendedores(resV.data);
-      setCategorias(resC.data);
-    } catch (_) {}
+      setVendedores(Array.isArray(resV.data) ? resV.data : []);
+      setCategorias(Array.isArray(resC.data) ? resC.data : []);
+    } catch (e) {
+      console.warn('[AdminAsignacionesScreen] listas base:', e?.message || e);
+      // Antes el fallo era silencioso y la lista de vendedores quedaba con el
+      // spinner girando para siempre, sin decir por qué.
+      setErrorListas(e?.message || 'No se pudieron cargar vendedores y categorías.');
+    } finally {
+      setCargandoListas(false);
+    }
   };
 
   const agregarProducto = (p) => {
@@ -206,7 +222,7 @@ export default function AdminAsignacionesScreen({ navigation }) {
       setModalVisible(false);
       cargar();
     } catch (e) {
-      Alert.alert('No se pudo guardar', e?.response?.data?.mensaje || 'Intentá de nuevo.');
+      Alert.alert('No se pudo guardar', e?.message || 'Intentá de nuevo.');
     } finally {
       setGuardando(false);
     }
@@ -225,7 +241,7 @@ export default function AdminAsignacionesScreen({ navigation }) {
               await api.post(`/admin/asignaciones/${asignacion.id}/liquidar`, {});
               cargar();
             } catch (e) {
-              Alert.alert('Error', e?.response?.data?.mensaje || 'No se pudo liquidar.');
+              Alert.alert('Error', e?.message || 'No se pudo liquidar.');
             } finally {
               setLiquidandoId(null);
             }
@@ -334,15 +350,34 @@ export default function AdminAsignacionesScreen({ navigation }) {
                     <Text style={{ color: '#1565C0', fontWeight: '700' }}>Cambiar</Text>
                   </TouchableOpacity>
                 ) : (
-                  <View style={s.vendedorLista}>
+                  // ScrollView (antes un View con maxHeight + overflow hidden): con más
+                  // vendedores de los que caben en 220px el resto quedaba cortado y no
+                  // había forma de llegar a ellos.
+                  <ScrollView
+                    style={s.vendedorLista}
+                    nestedScrollEnabled
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator
+                  >
                     {vendedores.length === 0
-                      ? <ActivityIndicator size="small" color="#1a1a1a" style={{ marginVertical: 12 }} />
+                      ? (cargandoListas
+                        ? <ActivityIndicator size="small" color="#1a1a1a" style={{ marginVertical: 12 }} />
+                        : (
+                          <View style={{ padding: 12, alignItems: 'center' }}>
+                            <Text style={{ color: errorListas ? '#e53e3e' : '#888', textAlign: 'center', marginBottom: 8 }}>
+                              {errorListas || 'No hay vendedores disponibles.'}
+                            </Text>
+                            <TouchableOpacity onPress={cargarListasBase}>
+                              <Text style={{ color: '#1565C0', fontWeight: '700' }}>Reintentar</Text>
+                            </TouchableOpacity>
+                          </View>
+                        ))
                       : vendedores.map(v => (
                         <TouchableOpacity key={v.id} style={s.vendedorItem} onPress={() => setVendedorSel(v)}>
                           <Text style={s.vendedorItemTxt}>{v.nombre} ({v.codigo})</Text>
                         </TouchableOpacity>
                       ))}
-                  </View>
+                  </ScrollView>
                 )}
               </View>
 
@@ -375,6 +410,7 @@ export default function AdminAsignacionesScreen({ navigation }) {
                 </ScrollView>
 
                 {cargandoProductos && <ActivityIndicator size="small" color="#1a1a1a" style={{ marginTop: 12 }} />}
+                {!!errorProductos && <Text style={{ color: '#e53e3e', marginTop: 12 }}>{errorProductos}</Text>}
 
                 <View style={s.grid}>
                   {productos.map(p => {

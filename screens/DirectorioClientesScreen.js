@@ -41,7 +41,7 @@ export default function DirectorioClientesScreen({ navigation }) {
       setRutas(data.rutas || []);
       setTotales({ total_rutas: data.total_rutas || 0, total_clientes: data.total_clientes || 0 });
     } catch (e) {
-      setError(e?.response?.data?.message || 'No se pudo cargar el directorio de clientes.');
+      setError(e?.message || 'No se pudo cargar el directorio de clientes.');
     } finally {
       setLoading(false);
       setBuscando(false);

@@ -154,6 +154,7 @@ export default function MapaCobrosScreen({ navigation, route }) {
   const webRef = useRef(null);
   const [seleccionado, setSeleccionado] = useState(null);
   const [visitados, setVisitados] = useState(new Set());
+  const [errorMapa, setErrorMapa] = useState('');
 
   useFocusEffect(useCallback(() => {
     (async () => {
@@ -208,7 +209,7 @@ export default function MapaCobrosScreen({ navigation, route }) {
         const cliente = conUbicacion.find(c => c.id === msg.id);
         if (cliente) setSeleccionado(cliente);
       }
-    } catch { /* ignore */ }
+    } catch (e) { console.warn("[MapaCobros] fallo ignorado:", e?.message || e); }
   }, [conUbicacion]);
 
   return (
@@ -251,7 +252,18 @@ export default function MapaCobrosScreen({ navigation, route }) {
         geolocationEnabled
         mixedContentMode="always"
         onMessage={onWebMessage}
+        onLoadStart={() => setErrorMapa('')}
+        onError={(e) => setErrorMapa(e?.nativeEvent?.description || 'No se pudo cargar el mapa.')}
+        onHttpError={(e) => setErrorMapa(`El mapa respondió con error HTTP ${e?.nativeEvent?.statusCode}.`)}
       />
+      {!!errorMapa && (
+        // El mapa necesita internet (OpenStreetMap + Leaflet): sin señal quedaba
+        // en blanco sin explicar nada.
+        <View style={{ position: 'absolute', left: 16, right: 16, top: insets.top + 110, backgroundColor: '#fff3cd', borderRadius: 10, padding: 12 }}>
+          <Text style={{ color: '#856404', fontWeight: '700' }}>🗺️ El mapa necesita conexión a internet</Text>
+          <Text style={{ color: '#856404', marginTop: 4, fontSize: 12 }}>{errorMapa}</Text>
+        </View>
+      )}
 
       {/* Card flotante del cliente seleccionado */}
       {seleccionado && (() => {

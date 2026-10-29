@@ -134,8 +134,8 @@ export default function CrearClienteScreen({ navigation }) {
         return;
       }
       const position = await Location.getCurrentPositionAsync({});
-      setLatitud(position.coords.latitude.toString());
-      setLongitud(position.coords.longitude.toString());
+      setLatitud(position.coords.latitude.toString()); setLatError('');
+      setLongitud(position.coords.longitude.toString()); setLongError('');
       Alert.alert('Ubicación capturada', 'Coordenadas registradas correctamente.');
     } catch (error) {
       Alert.alert('Error', error.message || 'No se pudo obtener la ubicación.');
@@ -314,6 +314,7 @@ export default function CrearClienteScreen({ navigation }) {
 
       const offlineError = esErrorTransitorio(error);
       if (offlineError) {
+        try {
         await offlineQueue.enqueueRequest({
           method: 'POST',
           url: '/clientes',
@@ -339,6 +340,12 @@ export default function CrearClienteScreen({ navigation }) {
           'El cliente se guardó localmente y se sincronizará cuando haya conexión.',
           [{ text: 'OK', onPress: () => navigation.goBack() }]
         );
+        } catch (errCola) {
+          // Antes un fallo al encolar escapaba sin aviso y el cliente no se
+          // guardaba en ningún lado.
+          console.warn('[CrearCliente] no se pudo encolar:', errCola?.message || errCola);
+          Alert.alert('No se guardó el cliente', `${errCola?.message || errCola}\n\nNo cierres esta pantalla: intenta de nuevo.`);
+        }
       } else {
         Alert.alert('Error', errorMessage);
       }
@@ -377,6 +384,19 @@ export default function CrearClienteScreen({ navigation }) {
     }
     if (!longitud.trim()) {
       setLongError('Requerido');
+      valid = false;
+    }
+    // Antes bastaba con escribir cualquier cosa: "abc" pasaba la validación y
+    // el servidor lo rechazaba después (o, sin conexión, quedaba encolado para
+    // fallar al sincronizar).
+    const latNum = parseFloat(latitud.replace(',', '.'));
+    const lngNum = parseFloat(longitud.replace(',', '.'));
+    if (latitud.trim() && (!Number.isFinite(latNum) || Math.abs(latNum) > 90)) {
+      setLatError('Latitud inválida (entre -90 y 90)');
+      valid = false;
+    }
+    if (longitud.trim() && (!Number.isFinite(lngNum) || Math.abs(lngNum) > 180)) {
+      setLongError('Longitud inválida (entre -180 y 180)');
       valid = false;
     }
     // Las fotos del DUI son opcionales — a veces la cámara falla y no debe
@@ -546,7 +566,7 @@ export default function CrearClienteScreen({ navigation }) {
           placeholder="Latitud"
           placeholderTextColor={colors.textMuted}
           value={latitud}
-          onChangeText={setLatitud}
+          onChangeText={t => { setLatitud(t); setLatError(''); }}
           keyboardType="numeric"
         />
 
@@ -555,7 +575,7 @@ export default function CrearClienteScreen({ navigation }) {
           placeholder="Longitud"
           placeholderTextColor={colors.textMuted}
           value={longitud}
-          onChangeText={setLongitud}
+          onChangeText={t => { setLongitud(t); setLongError(''); }}
           keyboardType="numeric"
         />
         {(latError || longError) ? <Text style={s.errorText}>{latError || longError}</Text> : null}
