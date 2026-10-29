@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import api, { TIMEOUT_LECTURA_CACHE } from '../services/api';
+import { asegurarHttps } from '../services/seguridad';
 import { useConnectivity } from '../services/connectivity';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -28,7 +29,7 @@ const FILTROS = [
 const urlComprobante = (path) => {
   if (!path) return null;
   const base = (api.defaults.baseURL || '').replace(/\/api\/?$/, '');
-  return `${base}${path}`;
+  return asegurarHttps(`${base}${path}`, api.defaults.baseURL);
 };
 
 export default function MisValesScreen({ navigation }) {

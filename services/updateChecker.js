@@ -3,6 +3,7 @@ import Constants from 'expo-constants';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
 import api from './api';
+import { validarUrlDescarga, esHttps } from './seguridad';
 
 // Usa el endpoint autenticado de la API — el servidor lee version.json o cae al fallback configurado
 const VERSION_ENDPOINT = '/version';
@@ -27,6 +28,9 @@ const esVersionMayor = (remota, local) => {
 // FileProvider que ya trae expo-file-system — quedan solo 2 toques
 // (Instalar, Abrir).
 const descargarEInstalar = async (url, onProgress) => {
+  // Un APK que se instala solo puede venir por HTTPS: con http:// cualquiera en
+  // la red podría cambiarlo por uno malicioso en el camino.
+  validarUrlDescarga(url);
   if (Platform.OS !== 'android') {
     const { Linking } = require('react-native');
     await Linking.openURL(url);
@@ -66,6 +70,12 @@ export const verificarActualizacion = async ({ manual = false, onDescargando } =
     const { version, url, notas } = data || {};
     if (!version || !url) {
       if (manual) Alert.alert('Sin respuesta', 'El servidor no devolvió información de versión.');
+      return;
+    }
+    if (!esHttps(url)) {
+      // Se ignora la actualización en vez de ofrecer una descarga insegura.
+      console.warn('[updateChecker] enlace de descarga sin HTTPS, ignorado:', url);
+      if (manual) Alert.alert('Actualización bloqueada', 'El enlace de descarga del servidor no usa HTTPS, por seguridad no se descargará. Avisa a soporte.');
       return;
     }
     if (!esVersionMayor(version, versionActual)) {

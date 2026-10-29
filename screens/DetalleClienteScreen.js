@@ -6,6 +6,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import api, { esErrorTransitorio, TIMEOUT_LECTURA_CACHE } from '../services/api';
+import { asegurarHttps } from '../services/seguridad';
 import { useConnectivity } from '../services/connectivity';
 import { guardarClienteCache, leerClienteCache, generarNumeroRecibo, encolarPago, guardarEnHistorial, marcarClienteVisitado } from '../services/cobrosOffline';
 import * as offlineQueue from '../services/offlineQueue';
@@ -842,7 +843,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
               ) : (
                 <TouchableOpacity activeOpacity={0.9} onPress={() => setFotoAmpliada(true)}>
                   <Image
-                    source={{ uri: cliente.foto_casa }}
+                    source={{ uri: asegurarHttps(cliente.foto_casa, api.defaults.baseURL) }}
                     style={s.fotoCasaImg}
                     resizeMode="cover"
                     onError={() => setFotoError(true)}
@@ -1458,7 +1459,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
       <Modal visible={fotoAmpliada} transparent animationType="fade" onRequestClose={() => setFotoAmpliada(false)}>
         <TouchableOpacity style={s.fotoModalFondo} activeOpacity={1} onPress={() => setFotoAmpliada(false)}>
           {cliente?.foto_casa ? (
-            <Image source={{ uri: cliente.foto_casa }} style={s.fotoModalImg} resizeMode="contain" />
+            <Image source={{ uri: asegurarHttps(cliente.foto_casa, api.defaults.baseURL) }} style={s.fotoModalImg} resizeMode="contain" />
           ) : null}
           <Text style={s.fotoModalCerrar}>Tocá para cerrar</Text>
         </TouchableOpacity>

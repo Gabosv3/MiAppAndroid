@@ -1,11 +1,18 @@
 import axios from 'axios';
 import Constants from 'expo-constants';
 import { addDebugLog } from './debugLog';
+import { urlApiSegura, mensajeUrlInsegura } from './seguridad';
 
 const envUrl = process.env.EXPO_PUBLIC_API_URL;
 const manifestUrl = Constants.manifest?.extra?.EXPO_PUBLIC_API_URL;
 const expoConfigUrl = Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL;
 const BASE_URL = envUrl || manifestUrl || expoConfigUrl || 'https://panel.distribuidorabriancescomenjivar.com/api';
+
+// HTTPS obligatorio: en una build de producción una URL http:// bloquea TODAS
+// las peticiones (contraseñas y cobros no deben viajar sin cifrar). En
+// desarrollo se permite http solo hacia equipos de la red local.
+const URL_SEGURA = urlApiSegura(BASE_URL);
+if (!URL_SEGURA) console.error('[API] ' + mensajeUrlInsegura(BASE_URL));
 
 if (!envUrl && !manifestUrl && !expoConfigUrl) {
   console.warn('API URL no encontrada en variables de entorno, usando fallback:', BASE_URL);
@@ -70,6 +77,11 @@ export const esperarSinActividad = async (maxMs = 60000) => {
 };
 
 api.interceptors.request.use((config) => {
+  if (!URL_SEGURA) {
+    const err = new Error(mensajeUrlInsegura(BASE_URL));
+    err.inseguro = true;
+    return Promise.reject(err);
+  }
   if (_token) config.headers.Authorization = `Bearer ${_token}`;
   if (!config.precarga) { _fgActivos += 1; config._contadoFg = true; }
   return config;

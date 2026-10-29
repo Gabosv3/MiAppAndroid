@@ -176,6 +176,14 @@ export function AuthProvider({ children }) {
       console.log('Response data:', e.response?.data);
       console.log('Full error:', e);
 
+      // Conexión insegura bloqueada (URL sin HTTPS): no es un problema de red,
+      // es de configuración — se muestra tal cual en vez de intentar login offline.
+      if (e.inseguro) {
+        clearAuthToken();
+        setError(e.message);
+        return;
+      }
+
       // Solo fallback a offline si es error de RED, no error de credenciales del servidor
       const isNetworkError = !e.response ||
         e.message?.includes('Sin conexión') ||
