@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import api from './api';
+import api, { esperarSinActividad } from './api';
 import { fechaHoyLocal, fechaLocalDesde } from './dateUtils';
 import {
   guardarRutaCache,
@@ -17,9 +17,12 @@ import * as localDb from './localDb';
 // a abrir, offline no había nada.
 
 const KEY_FECHA = 'PRECARGA_DIA_FECHA';
-const CONCURRENCIA = 4;       // peticiones en paralelo: suficiente sin saturar la red del teléfono
+const CONCURRENCIA = 2;       // pocas en paralelo: servidores lentos o de un solo hilo se saturan con más
+const PAUSA_ENTRE_MS = 150;   // respiro entre peticiones para que el uso normal de la app pase primero
 const LOTE_GUARDADO = 15;     // clientes por escritura al almacenamiento (evita pisarse)
 const TIMEOUT_CLIENTE = 20000;
+const TAM_LOTE = 30;          // clientes por petición en lote (el servidor acepta hasta 40)
+const TIMEOUT_LOTE = 45000;
 
 let enCurso = null; // candado a nivel de módulo: nunca dos precargas a la vez
 
@@ -57,12 +60,53 @@ const precargarCobros = async (onProgreso, errores) => {
     await guardarClientesCacheBatch(entradas, { sobrescribir: true });
   };
 
+  // ── Camino rápido: el servidor entrega el detalle de varios clientes en UNA
+  // petición (GET /cobros/clientes-lote). Antes eran N peticiones, cada una con
+  // el arranque completo de Laravel, y con 100+ clientes saturaban el servidor.
+  // Si el servidor aún no tiene ese endpoint (404/405), se cae al método por
+  // cliente de más abajo, sin que la persona note nada.
+  let loteDisponible = true;
+  let pendientesPorCliente = pendientes;
+  if (pendientes.length > 0) {
+    const sinResolver = [];
+    for (let i = 0; i < pendientes.length && loteDisponible; i += TAM_LOTE) {
+      const grupo = pendientes.slice(i, i + TAM_LOTE);
+      try {
+        await esperarSinActividad();
+        const res = await api.get('/cobros/clientes-lote', {
+          params: { ids: grupo.join(',') },
+          timeout: TIMEOUT_LOTE,
+          precarga: true,
+        });
+        const detalles = (res?.data?.detalles || []).filter((d) => d?.cliente?.id);
+        await guardarClientesCacheBatch(detalles.map((d) => ({ clienteId: d.cliente.id, data: d })), { sobrescribir: true });
+        const recibidos = new Set(detalles.map((d) => d.cliente.id));
+        hechos += recibidos.size;
+        // Los que el servidor no devolvió (p. ej. ya no son de tus rutas) no se reintentan.
+        onProgreso?.({ fase: 'clientes', hechos, total });
+      } catch (e) {
+        if (e?.status === 404 || e?.status === 405) {
+          loteDisponible = false;
+          sinResolver.push(...pendientes.slice(i));
+        } else {
+          errores.push(`Lote de clientes ${Math.floor(i / TAM_LOTE) + 1}: ${e?.message || e}`);
+        }
+      }
+      await new Promise((r) => setTimeout(r, PAUSA_ENTRE_MS));
+    }
+    pendientesPorCliente = loteDisponible ? [] : sinResolver;
+  }
+
+  // ── Respaldo: un cliente por petición (servidores sin el endpoint en lote).
   let siguiente = 0;
   const trabajador = async () => {
-    while (siguiente < pendientes.length) {
-      const id = pendientes[siguiente++];
+    while (siguiente < pendientesPorCliente.length) {
+      const id = pendientesPorCliente[siguiente++];
       try {
-        const res = await api.get(`/cobros/clientes/${id}`, { timeout: TIMEOUT_CLIENTE });
+        // La precarga cede el paso: si la persona está abriendo un cliente o
+        // guardando algo, espera a que termine antes de pedir el siguiente.
+        await esperarSinActividad();
+        const res = await api.get(`/cobros/clientes/${id}`, { timeout: TIMEOUT_CLIENTE, precarga: true });
         if (!res?.data?.cliente) throw new Error('respuesta sin datos del cliente');
         lote.push({ clienteId: id, data: res.data });
         if (lote.length >= LOTE_GUARDADO) await volcarLote();
@@ -71,6 +115,7 @@ const precargarCobros = async (onProgreso, errores) => {
         errores.push(`Cliente ${id}: ${e?.message || e}`);
       }
       onProgreso?.({ fase: 'clientes', hechos, total });
+      await new Promise((r) => setTimeout(r, PAUSA_ENTRE_MS));
     }
   };
   await Promise.all(Array.from({ length: CONCURRENCIA }, trabajador));

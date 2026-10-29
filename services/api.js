@@ -56,8 +56,22 @@ let _token = null;
 export const setAuthToken = (token) => { _token = token; };
 export const clearAuthToken = () => { _token = null; };
 
+// Peticiones "de primer plano" en curso (todo lo que no sea la precarga del día).
+// Con un servidor lento o de un solo hilo, la precarga de 100+ clientes hacía
+// esperar en fila a la persona que abría un cliente: la petición tardaba más
+// que su timeout y la app decía "sin conexión". La precarga espera a que no
+// haya nada en primer plano (ver esperarSinActividad) antes de cada petición.
+let _fgActivos = 0;
+export const esperarSinActividad = async (maxMs = 60000) => {
+  const t0 = Date.now();
+  while (_fgActivos > 0 && Date.now() - t0 < maxMs) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+};
+
 api.interceptors.request.use((config) => {
   if (_token) config.headers.Authorization = `Bearer ${_token}`;
+  if (!config.precarga) { _fgActivos += 1; config._contadoFg = true; }
   return config;
 });
 
@@ -80,10 +94,12 @@ api.interceptors.response.use(
   (response) => {
     // Un request que sí completó demuestra que hay conexión — recupera el
     // estado "en línea" al instante en vez de esperar el próximo ping.
+    if (response.config?._contadoFg) _fgActivos = Math.max(0, _fgActivos - 1);
     _onTransitorio?.(false);
     return response;
   },
   (error) => {
+    if (error.config?._contadoFg) _fgActivos = Math.max(0, _fgActivos - 1);
     if (error.response) {
       // Error del servidor (4xx, 5xx) — preservar .response para que offlineQueue distinga
       if (error.response.status >= 500) _onTransitorio?.(true);
