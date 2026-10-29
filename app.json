@@ -21,7 +21,7 @@
         "backgroundColor": "#ffffff"
       },
       "package": "com.sidb.distribuidora",
-      "versionCode": 24,
+      "versionCode": 25,
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
