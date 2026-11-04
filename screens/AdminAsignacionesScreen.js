@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import api, { TIMEOUT_LECTURA_CACHE } from '../services/api';
+import { validarLimitesAsignacion } from '../services/limites';
 import { useConnectivity } from '../services/connectivity';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fechaHoyLocal } from '../services/dateUtils';
@@ -199,6 +200,11 @@ export default function AdminAsignacionesScreen({ navigation }) {
     });
     if (detalles.some(d => d.cantidad_asignada <= 0)) {
       Alert.alert('Cantidad inválida', 'Todas las cantidades deben ser mayores a 0.');
+      return;
+    }
+    const errLimites = validarLimitesAsignacion(detalles.map((d, i) => ({ ...d, nombre: carrito[i]?.nombre })));
+    if (errLimites) {
+      Alert.alert('Revisa la asignación', errLimites);
       return;
     }
     setGuardando(true);

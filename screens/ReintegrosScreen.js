@@ -7,6 +7,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import api from '../services/api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LISTA_RAPIDA } from '../services/listas';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
@@ -173,7 +174,7 @@ export default function ReintegrosScreen({ navigation }) {
           <Text style={s.emptyTxt}>Sin reintegros {ESTADO_CFG[filtro]?.label.toLowerCase()}</Text>
         </View>
       ) : (
-        <FlatList
+        <FlatList {...LISTA_RAPIDA}
           data={items}
           keyExtractor={i => String(i.id)}
           renderItem={renderItem}

@@ -43,6 +43,7 @@ export default function ReporteDiarioScreen({ navigation }) {
   useFocusEffect(useCallback(() => {
     (async () => {
       setCargando(true);
+      try {
       const duiGuardado = await AsyncStorage.getItem(DUI_STORAGE_KEY);
       if (duiGuardado) setDui(duiGuardado);
 
@@ -93,8 +94,12 @@ export default function ReporteDiarioScreen({ navigation }) {
 
       const pend = await leerPagosPendientes();
       setPagosPend(pend);
-
-      setCargando(false);
+      } catch (e) {
+        // Antes un fallo aquí dejaba la pantalla cargando para siempre.
+        console.warn('[ReporteDiario] no se pudo cargar el reporte:', e?.message || e);
+      } finally {
+        setCargando(false);
+      }
     })();
   }, [isOnline]));
 

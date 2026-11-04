@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
@@ -6,6 +6,7 @@ import * as Sharing from 'expo-sharing';
 import { fmtFechaCorta } from '../services/dateUtils';
 import { enviarReciboPorWhatsApp, htmlPieInformativo, htmlMetodosPago } from '../services/reciboWhatsApp';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { escHtml } from '../services/html';
 
 const fmt = (n) => `$${Number(n||0).toFixed(2)}`;
 const capitalizar = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
@@ -37,13 +38,13 @@ const buildHtmlRecibo = ({ clienteNombre, codigoCliente, ventaNumero, producto, 
     <div class="c b" style="font-size:${grande}px">DISTRIBUIDORA BM</div>
     <div class="c">6047-9762</div>
     <div style="height:8px"></div>
-    <div class="row"><span class="b">${numeroRecibo||'N/A'}</span><span>${fecha}</span></div>
+    <div class="row"><span class="b">${escHtml(numeroRecibo||'N/A')}</span><span>${fecha}</span></div>
     <div class="div"></div>
-    <div><span class="b">${clienteNombre}</span>${codigoCliente ? ` (${codigoCliente})` : ''}</div>
-    ${producto ? `<div>${producto}</div>` : ''}
-    <div class="row"><span>Venta:</span><span>${ventaNumero||'N/A'}</span></div>
-    <div class="row"><span>Cobrador:</span><span>${nombreCobrador}</span></div>
-    <div class="row"><span>Pago:</span><span>${capitalizar(metodoPago)}</span></div>
+    <div><span class="b">${escHtml(clienteNombre)}</span>${codigoCliente ? ` (${escHtml(codigoCliente)})` : ''}</div>
+    ${producto ? `<div>${escHtml(producto)}</div>` : ''}
+    <div class="row"><span>Venta:</span><span>${escHtml(ventaNumero||'N/A')}</span></div>
+    <div class="row"><span>Cobrador:</span><span>${escHtml(nombreCobrador)}</span></div>
+    <div class="row"><span>Pago:</span><span>${escHtml(capitalizar(metodoPago))}</span></div>
     <div class="div"></div>
     <div class="row"><span>Debía:</span><span>${fmt(saldoAntes)}</span></div>
     <div class="row tot"><span class="b">Abona:</span><span class="b">${fmt(montoTotal)}</span></div>
@@ -109,9 +110,13 @@ export default function PagoRegistradoScreen({ navigation, route }) {
     autoImprimir, isOffline,
   } = route.params;
 
-  // Abrir share sheet cuando la pantalla esté completamente visible
+  // Abrir share sheet cuando la pantalla esté completamente visible. Solo UNA
+  // vez: useFocusEffect corre cada vez que la pantalla recupera el foco (p. ej.
+  // al volver de otra pantalla) y volvía a abrir el diálogo de impresión.
+  const yaImprimio = useRef(false);
   useFocusEffect(useCallback(() => {
-    if (autoImprimir) {
+    if (autoImprimir && !yaImprimio.current) {
+      yaImprimio.current = true;
       imprimirRecibo({ clienteNombre, codigoCliente, ventaNumero, producto, numeroRecibo, montoTotal, metodoPago, proximaVisita, saldoAntes, saldoDespues, nombreCobrador });
     }
   }, [autoImprimir]));

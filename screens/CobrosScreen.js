@@ -21,6 +21,11 @@ const AVATAR_COLORS = ['#1565C0','#6a1b9a','#00695c','#e65100','#c62828','#28359
 const avatarColor = (name = '') => AVATAR_COLORS[(name.charCodeAt(0) || 0) % AVATAR_COLORS.length];
 const initials    = (name = '') => name.trim().split(/\s+/).slice(0,2).map(w=>w[0]?.toUpperCase()||'').join('');
 
+// Última vez que se pidió la ruta al servidor con éxito (vive mientras la app esté
+// abierta): si es muy reciente no se vuelve a pedir al regresar de un cliente.
+let ultimaCargaRuta = 0;
+const FRESCURA_RUTA_MS = 45000;
+
 export default function CobrosScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const [rutas,    setRutas]    = useState([]);
@@ -102,44 +107,57 @@ export default function CobrosScreen({ navigation }) {
     await guardarClientesCacheBatch(entradas);
   }, []);
 
-  const cargar = useCallback(async () => {
+  // Stale-while-revalidate: si ya hay una ruta guardada de HOY se muestra al
+  // instante y se refresca por detrás. Antes cada vez que se volvía a esta
+  // pantalla (después de cada cliente) salía el spinner hasta que respondía el
+  // servidor — con una red lenta eran segundos con la lista en blanco.
+  const cargar = useCallback(async ({ forzar = false } = {}) => {
+    setError('');
+    const aplicarRuta = (datos, desdeCache) => {
+      setDia(datos.dia || '');
+      setRutas(datos.rutas || []);
+      if ((datos.rutas || []).length === 1) setRutaId(datos.rutas[0].id);
+      setEsCache(desdeCache);
+    };
+
+    let cache = null;
+    try { cache = await leerRutaCache(); } catch { cache = null; }
+    const hayCacheHoy = !!(cache && cache.esDeHoy);
+    if (hayCacheHoy) {
+      aplicarRuta(cache.data, !isOnline);
+      setLoading(false);
+    }
+
     try {
-      setError('');
-      if (isOnline) {
-        const { data } = await api.get('/cobros/ruta-hoy', { timeout: TIMEOUT_LECTURA_CACHE });
+      if (!isOnline) {
+        if (!hayCacheHoy) {
+          if (cache && !cache.esDeHoy) avisarDatosDesactualizados();
+          else setError('Sin conexión y no hay datos guardados.\nConéctate para cargar tu ruta.');
+        }
+        return;
+      }
+
+      const reciente = hayCacheHoy && !forzar && (Date.now() - ultimaCargaRuta) < FRESCURA_RUTA_MS;
+      if (!reciente) {
+        // Con algo ya en pantalla se falla rápido (hay qué mostrar); sin nada se
+        // espera el tiempo normal en vez de dejar al cobrador con un error.
+        const { data } = await api.get('/cobros/ruta-hoy', hayCacheHoy ? { timeout: TIMEOUT_LECTURA_CACHE } : undefined);
         await guardarRutaCache(data);
-        setDia(data.dia || '');
-        setRutas(data.rutas || []);
-        if ((data.rutas||[]).length === 1) setRutaId(data.rutas[0].id);
-        setEsCache(false);
-        // No se espera (no-await) — no debe retrasar que la pantalla muestre
-        // la ruta; corre en segundo plano.
+        ultimaCargaRuta = Date.now();
+        aplicarRuta(data, false);
+        // No se espera (no-await) — corre en segundo plano.
         precachearClientesDeRuta(data.rutas);
-        const pendientes = await contarPagosPendientes();
-        if (pendientes > 0) {
-          const result = await sincronizarPagosPendientes(api);
-          console.log(`🔄 Cobros sincronizados: ${result.synced}/${result.total}`);
-          if (result.errores?.length) avisarRechazados();
-        }
-      } else {
-        const cache = await leerRutaCache();
-        if (cache && cache.esDeHoy) {
-          setDia(cache.data.dia || '');
-          setRutas(cache.data.rutas || []);
-          if ((cache.data.rutas||[]).length === 1) setRutaId(cache.data.rutas[0].id);
-          setEsCache(true);
-        } else if (cache && !cache.esDeHoy) {
-          avisarDatosDesactualizados();
-        } else {
-          setError('Sin conexión y no hay datos guardados.\nConéctate para cargar tu ruta.');
-        }
+      }
+
+      const pendientes = await contarPagosPendientes();
+      if (pendientes > 0) {
+        const result = await sincronizarPagosPendientes(api);
+        console.log(`🔄 Cobros sincronizados: ${result.synced}/${result.total}`);
+        if (result.errores?.length) avisarRechazados();
       }
     } catch (e) {
-      const cache = await leerRutaCache();
-      if (cache && cache.esDeHoy) {
-        setDia(cache.data.dia || '');
-        setRutas(cache.data.rutas || []);
-        setEsCache(true);
+      if (hayCacheHoy) {
+        setEsCache(true); // falló el refresco: se queda lo guardado
       } else if (cache && !cache.esDeHoy) {
         avisarDatosDesactualizados();
       } else {
@@ -149,7 +167,6 @@ export default function CobrosScreen({ navigation }) {
   }, [isOnline, precachearClientesDeRuta]);
 
   useFocusEffect(useCallback(() => {
-    setLoading(true);
     cargar();
     contarPagosPendientes().then(setPagosPend);
     leerOrdenClientes().then(setOrdenIds);
@@ -503,7 +520,7 @@ export default function CobrosScreen({ navigation }) {
           <Text style={{fontSize:48,marginBottom:12}}>😕</Text>
           <Text style={{fontSize:16,fontWeight:'700',color:'#222',marginBottom:6}}>Sin ruta disponible</Text>
           <Text style={{color:'#888',textAlign:'center',marginBottom:24}}>{error}</Text>
-          <TouchableOpacity style={s.retryBtn} onPress={()=>{setLoading(true);cargar();}}>
+          <TouchableOpacity style={s.retryBtn} onPress={()=>{setLoading(true);cargar({ forzar: true });}}>
             <Text style={s.retryTxt}>Reintentar</Text>
           </TouchableOpacity>
         </View>
@@ -592,7 +609,7 @@ export default function CobrosScreen({ navigation }) {
             showsVerticalScrollIndicator={false}
             refreshControl={
               !modoReorden
-                ? <RefreshControl refreshing={refreshing} onRefresh={()=>{setRefreshing(true);cargar();}} colors={['#1565C0']}/>
+                ? <RefreshControl refreshing={refreshing} onRefresh={()=>{setRefreshing(true);cargar({ forzar: true });}} colors={['#1565C0']}/>
                 : undefined
             }
             ListHeaderComponent={

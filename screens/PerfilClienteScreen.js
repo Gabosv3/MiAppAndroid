@@ -6,6 +6,10 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import * as Location from 'expo-location';
 import api, { esErrorTransitorio, TIMEOUT_LECTURA_CACHE } from '../services/api';
+import { guardarPerfilCache, leerPerfilCache } from '../services/cobrosOffline';
+import { obtenerUbicacion } from '../services/ubicacion';
+import { asegurarHttps } from '../services/seguridad';
+import FotoRemota from '../components/FotoRemota';
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -30,14 +34,23 @@ export default function PerfilClienteScreen({ route, navigation }) {
   const [ventaAbierta, setVentaAbierta] = useState(null); // id de la venta expandida
   const [updatingUbic, setUpdatingUbic] = useState(false);
 
+  // Lo guardado se muestra al instante (y sin señal); el servidor refresca por detrás.
   const cargar = useCallback(async () => {
-    setLoading(true);
     setError('');
+    const cache = await leerPerfilCache(clienteId);
+    const hayCache = !!cache?.data?.cliente;
+    if (hayCache) {
+      setData(cache.data);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     try {
-      const { data: resp } = await api.get(`/cobros/clientes/${clienteId}/perfil`, { timeout: TIMEOUT_LECTURA_CACHE });
+      const { data: resp } = await api.get(`/cobros/clientes/${clienteId}/perfil`, hayCache ? { timeout: TIMEOUT_LECTURA_CACHE } : undefined);
       setData(resp);
+      guardarPerfilCache(clienteId, resp);
     } catch (e) {
-      setError(e?.message || 'No se pudo cargar el perfil del cliente.');
+      if (!hayCache) setError(e?.message || 'No se pudo cargar el perfil del cliente.');
     } finally {
       setLoading(false);
     }
@@ -66,7 +79,7 @@ export default function PerfilClienteScreen({ route, navigation }) {
         Alert.alert('Permiso denegado', 'Necesitamos acceso a la ubicación.');
         return;
       }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const pos = await obtenerUbicacion({ modo: 'alta' });
       const lat = pos.coords.latitude;
       const lng = pos.coords.longitude;
 
@@ -141,7 +154,7 @@ export default function PerfilClienteScreen({ route, navigation }) {
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
         {/* Ficha del cliente */}
         <View style={s.card}>
-          {c.foto_casa ? <Image source={{ uri: c.foto_casa }} style={s.fotoCasa} /> : null}
+          {c.foto_casa ? <FotoRemota uri={asegurarHttps(c.foto_casa, api.defaults.baseURL)} style={s.fotoCasa} /> : null}
           <Text style={s.nombreGrande}>{c.nombre}</Text>
           {c.codigo_anterior ? <Text style={s.metaTxt}>Código: {c.codigo_anterior}</Text> : null}
           {c.direccion ? <Text style={s.metaTxt}>📍 {c.direccion}</Text> : null}

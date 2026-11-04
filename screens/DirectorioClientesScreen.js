@@ -6,6 +6,7 @@ import {
 import api, { TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LISTA_RAPIDA } from '../services/listas';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
@@ -142,7 +143,7 @@ export default function DirectorioClientesScreen({ navigation }) {
 
       {!loading && !error && rutas.length > 1 && (
         <View style={s.chipsWrap}>
-          <FlatList
+          <FlatList {...LISTA_RAPIDA}
             horizontal
             data={rutas}
             keyExtractor={(r) => String(r.ruta?.id)}

@@ -21,6 +21,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import api, { esErrorTransitorio, TIMEOUT_LECTURA_CACHE } from '../services/api';
+import { validarLimitesVenta, validarMonto } from '../services/limites';
+import { comprimirFoto, PERFIL_FOTO } from '../services/fotos';
+import { obtenerUbicacion } from '../services/ubicacion';
+import { reportarErrorSync } from '../services/reporteSync';
 import * as localDb from '../services/localDb';
 import { guardarAsignacionCache, leerAsignacionCache } from '../services/localDb';
 import * as Print from 'expo-print';
@@ -34,6 +38,7 @@ import { fmtFechaCorta } from '../services/dateUtils';
 import FirmaPad from '../components/FirmaPad';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useEscalaTexto } from '../hooks/useEscalaTexto';
+import { LISTA_RAPIDA } from '../services/listas';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -209,6 +214,12 @@ export default function NuevaVentaScreen({ navigation, route }) {
       const montoFinanciado = itemsCredito.reduce((s, i) => s + parseFloat(i.precio_venta || 0) * Number(i.cantidad || 1), 0);
       const primaAplicada = usarPrima ? (parseFloat(pago) || 0) : 0;
       const saldoAFinanciar = Math.max(0, montoFinanciado - primaAplicada);
+      const errMonto = validarMonto(saldoAFinanciar, 'El saldo a financiar del pagaré');
+      if (errMonto) {
+        setGenerandoPagare(false);
+        Alert.alert('Pagaré', errMonto);
+        return;
+      }
 
       const productosHtml = itemsCredito.map(i => `
         <tr>
@@ -473,11 +484,14 @@ export default function NuevaVentaScreen({ navigation, route }) {
     try {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') { Alert.alert('Permiso requerido','Necesitamos acceso a la cámara.'); return; }
-      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 1.0 });
+      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.85 });
       if (!result.canceled && result.assets?.[0]) {
         setCcScanningOcr(true);
         try {
-          const datos = await extractTextFromImage(result.assets[0].uri);
+          // Se reduce a ~1600 px antes del reconocimiento: ML Kit lee igual de bien el
+          // DUI y tarda mucho menos (y usa menos RAM) que con la foto original de 12 MP.
+          const reducida = await comprimirFoto(result.assets[0], { ancho: 1600, calidad: 0.8 });
+          const datos = await extractTextFromImage(reducida.uri);
           if (datos) {
             const campos = [];
             if (datos.dui && !ccDui)       { ccHandleDuiChange(datos.dui);                    campos.push(`✅ DUI: ${datos.dui}`); }
@@ -498,7 +512,8 @@ export default function NuevaVentaScreen({ navigation, route }) {
       if (status !== 'granted') { Alert.alert('Permiso requerido','Necesitamos acceso a la cámara.'); return; }
       const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.8 });
       if (!result.canceled && result.assets?.[0]) {
-        const file = { uri: result.assets[0].uri, name: `${tipo}_${Date.now()}.jpg`, type: 'image/jpeg' };
+        const reducida = await comprimirFoto(result.assets[0], tipo === 'casa' ? PERFIL_FOTO.normal : PERFIL_FOTO.documento);
+        const file = { uri: reducida.uri, name: `${tipo}_${Date.now()}.jpg`, type: 'image/jpeg' };
         if (tipo === 'dui_frente')  { setCcDuiFrente(file);  setCcFrenteError(''); }
         else if (tipo === 'dui_reverso') { setCcDuiReverso(file); setCcReversoError(''); }
         else if (tipo === 'casa')   { setCcFotoCasa(file); }
@@ -511,7 +526,7 @@ export default function NuevaVentaScreen({ navigation, route }) {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') { Alert.alert('Permiso denegado','Debe permitir el acceso a la ubicación.'); return; }
-      const pos = await Location.getCurrentPositionAsync({});
+      const pos = await obtenerUbicacion({ modo: 'alta' });
       setCcLatitud(pos.coords.latitude.toString());
       setCcLongitud(pos.coords.longitude.toString());
       Alert.alert('✅ Ubicación capturada','Coordenadas registradas correctamente.');
@@ -667,7 +682,23 @@ export default function NuevaVentaScreen({ navigation, route }) {
   // ── Cargar asignación activa ──────────────────────────────────────────────
   const cargarAsignacionHoy = useCallback(async () => {
     setAsignMsg('');
-    setLoadingAsignacion(true);
+    // Stale-while-revalidate: si ya hay una asignación guardada de HOY se muestra
+    // al instante y se refresca por detrás (el stock se corrige en cuanto llega).
+    // Antes la pantalla esperaba al servidor (hasta 8 s) con el spinner a la vista
+    // aunque los productos ya estuvieran en el teléfono.
+    let cacheHoy = null;
+    try {
+      const c = await leerAsignacionCache();
+      if (c && c.esDeHoy && Array.isArray(c.productos) && c.productos.length > 0) cacheHoy = c;
+    } catch { cacheHoy = null; }
+    if (cacheHoy) {
+      setProductos(cacheHoy.productos);
+      setCategorias(cacheHoy.categorias || []);
+      setAsignacionId(cacheHoy.asignacionId);
+      setLoadingAsignacion(false);
+    } else {
+      setLoadingAsignacion(true);
+    }
     try {
       const { data } = await api.get('/asignacion/hoy', { timeout: TIMEOUT_LECTURA_CACHE });
       const asignacion = data.asignacion;
@@ -984,11 +1015,24 @@ export default function NuevaVentaScreen({ navigation, route }) {
       return;
     }
 
+    // Mismos topes que valida el servidor: se avisa aquí en vez de mandar la venta
+    // para que vuelva rechazada (o se quede en la cola offline fallando).
+    const errLimites = validarLimitesVenta(carrito, cartTotals.pagoVal);
+    if (errLimites) {
+      Alert.alert('Revisa la venta', errLimites);
+      return;
+    }
+
     setConfirmModalVisible(true);
-  }, [carrito.length, cliente.id, cliente.dui, cartTotals.tipoPago, cartTotals.esMixto]);
+  }, [carrito, cliente.id, cliente.dui, cartTotals.tipoPago, cartTotals.esMixto, cartTotals.pagoVal]);
 
   // ── Corregir venta existente (modo edición) ─────────────────────────────────
   const enviarCorreccion = useCallback(async () => {
+    const errLimites = validarLimitesVenta(carrito, cartTotals.pagoVal);
+    if (errLimites) {
+      Alert.alert('Revisa la venta', errLimites);
+      return;
+    }
     const clienteId = cliente.id || 0;
     const payload = {
       motivo: motivoCorreccion.trim(),
@@ -1083,6 +1127,31 @@ export default function NuevaVentaScreen({ navigation, route }) {
     
     try {
       const { data } = await api.post('/ventas', payload);
+
+      // Comparación al instante: el total que calculó el servidor vs. el que vio el
+      // vendedor (y el cliente) en la app. Si no coinciden se avisa y se reporta al
+      // panel — el servidor devuelve el total que GUARDÓ, no un eco de lo enviado.
+      try {
+        const totalApp = Number(cartTotals.total);
+        const totalServidor = Number(data?.total);
+        if (Number.isFinite(totalApp) && Number.isFinite(totalServidor) && Math.abs(totalApp - totalServidor) >= 0.05) {
+          const detalle = `La app calculó $${totalApp.toFixed(2)} y el servidor guardó $${totalServidor.toFixed(2)} (diferencia $${Math.abs(totalApp - totalServidor).toFixed(2)}).`;
+          reportarErrorSync({
+            client_id: `v-${idempotencyKey}`,
+            tipo: 'diferencia',
+            metodo: 'POST',
+            endpoint: '/ventas',
+            etiqueta: `Venta ${data?.numero_venta || ''} ${cliente?.nombre || ''}`.trim(),
+            monto: totalApp,
+            motivo: detalle,
+          });
+          Alert.alert('⚠️ El total de la venta no coincide', `${detalle}
+
+Ya se avisó a la oficina. Revisa el ticket antes de entregarlo.`);
+        }
+      } catch (errCmp) {
+        console.warn('[NuevaVenta] no se pudo comparar el total:', errCmp?.message || errCmp);
+      }
 
       // Si se firmó un pagaré antes de confirmar esta venta, enlazarlo ahora
       // que ya existe venta_id. No bloquea la navegación — si falla, el
@@ -1797,7 +1866,7 @@ export default function NuevaVentaScreen({ navigation, route }) {
               onChangeText={setBusquedaCliente}
               autoFocus
             />
-            <FlatList
+            <FlatList {...LISTA_RAPIDA}
               data={[{ id: null, nombre: 'Consumidor Final', apellido: '' }, ...clientes]}
               keyExtractor={i => String(i.id ?? 'cf')}
               renderItem={({ item }) => {

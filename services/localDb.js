@@ -186,8 +186,28 @@ const saveItemsToTable = async (table, key, items = []) => {
 
   try {
     await initDb();
-    await executeSql(`DELETE FROM ${table}`);
 
+    // Todo en UNA transacción y con UNA sentencia preparada. Antes eran N
+    // sentencias sueltas (cada una preparada y confirmada por separado en el
+    // almacenamiento flash): con 200 clientes tardaba varios segundos, y si se
+    // cortaba a la mitad la tabla quedaba medio llena — y la lectura prefiere
+    // SQLite, así que se veían solo unos pocos clientes.
+    if (!isLegacyDatabase(database) && typeof database.withTransactionAsync === 'function') {
+      await database.withTransactionAsync(async () => {
+        await database.runAsync(`DELETE FROM ${table}`);
+        const sentencia = await database.prepareAsync(`INSERT OR REPLACE INTO ${table} (id, data) VALUES (?, ?)`);
+        try {
+          for (const item of items) {
+            await sentencia.executeAsync(String(item.id), JSON.stringify(item));
+          }
+        } finally {
+          await sentencia.finalizeAsync();
+        }
+      });
+      return;
+    }
+
+    await executeSql(`DELETE FROM ${table}`);
     for (const item of items) {
       await executeSql(
         `INSERT OR REPLACE INTO ${table} (id, data) VALUES (?, ?)`,

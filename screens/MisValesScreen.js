@@ -6,8 +6,10 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import api, { TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { asegurarHttps } from '../services/seguridad';
+import FotoRemota from '../components/FotoRemota';
 import { useConnectivity } from '../services/connectivity';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LISTA_RAPIDA } from '../services/listas';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
@@ -61,7 +63,7 @@ export default function MisValesScreen({ navigation }) {
     return (
       <TouchableOpacity style={s2.card} onPress={() => setPreview(item)} activeOpacity={0.8}>
         {item.comprobante_url ? (
-          <Image source={{ uri: urlComprobante(item.comprobante_url) }} style={s2.thumb} />
+          <FotoRemota uri={urlComprobante(item.comprobante_url)} style={s2.thumb} />
         ) : (
           <View style={[s2.thumb, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#f0f0f0' }]}>
             <Text style={{ fontSize: 20 }}>🧾</Text>
@@ -133,7 +135,7 @@ export default function MisValesScreen({ navigation }) {
           <Text style={s2.emptyTxt}>Sin vales{filtro ? ` ${ESTADO_INFO[filtro]?.label.toLowerCase()}` : ''}</Text>
         </View>
       ) : (
-        <FlatList
+        <FlatList {...LISTA_RAPIDA}
           data={vales}
           keyExtractor={i => String(i.id)}
           renderItem={renderItem}
@@ -155,7 +157,7 @@ export default function MisValesScreen({ navigation }) {
               </View>
               <ScrollView showsVerticalScrollIndicator={false}>
                 {preview.comprobante_url && (
-                  <Image source={{ uri: urlComprobante(preview.comprobante_url) }} style={s2.previewImg} resizeMode="contain" />
+                  <FotoRemota uri={urlComprobante(preview.comprobante_url)} style={s2.previewImg} resizeMode="contain" />
                 )}
                 <View style={s2.modalSection}>
                   <View style={s2.modalRow}><Text style={s2.modalLabel}>Monto</Text><Text style={[s2.modalValue, { color: '#e65100', fontWeight: '800' }]}>{fmt(preview.monto)}</Text></View>

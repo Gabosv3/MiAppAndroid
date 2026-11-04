@@ -6,6 +6,9 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Print from 'expo-print';
 import api, { esErrorTransitorio } from '../services/api';
+import { validarMonto } from '../services/limites';
+import { registrarCobroEnLibro } from '../services/libroLocal';
+import { reportarErrorSync } from '../services/reporteSync';
 import { useConnectivity } from '../services/connectivity';
 import { encolarPago, guardarEnHistorial, marcarClienteVisitado, generarNumeroRecibo } from '../services/cobrosOffline';
 import { useAuth } from '../context/AuthContext';
@@ -139,6 +142,11 @@ export default function RegistrarPagoScreen({ navigation, route }) {
           monto: montoNum, metodo,
           referencia: referencia.trim(), notas: notas.trim(),
         });
+              registrarCobroEnLibro({
+                id: idempotencyKey, usuarioId: user?.id, clienteId: cliente.id, clienteNombre: cliente.nombre,
+                ventaId, ventaNumero, numeroRecibo, monto: montoNum, metodo, referencia: referencia.trim(),
+                estado: 'pendiente', origen: 'offline',
+              });
         await guardarEnHistorial({
           clienteId: cliente.id, clienteNombre: cliente.nombre, clienteCodigo: codigoCliente,
           clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
@@ -190,6 +198,26 @@ export default function RegistrarPagoScreen({ navigation, route }) {
       // teléfono) — si por algún motivo no lo devuelve, se genera uno local
       // como respaldo para no dejar el recibo sin número.
       const numeroRecibo = data.numero_recibo || await generarNumeroRecibo(user?.id);
+      // Libro propio de la app: queda el monto que capturó el cobrador, sin depender
+      // de lo que el servidor haya guardado (luego se compara con su historial).
+      registrarCobroEnLibro({
+        id: idempotencyKey, usuarioId: user?.id, clienteId: cliente.id, clienteNombre: cliente.nombre,
+        ventaId, ventaNumero, numeroRecibo, monto: montoNum, metodo, referencia: referencia.trim(),
+        estado: 'enviado', origen: 'online',
+      });
+      // El servidor ahora devuelve lo que REALMENTE aplicó (monto_aplicado). Si no es
+      // lo que se cobró, se avisa en el momento y se reporta al panel.
+      if (data?.monto_aplicado != null && Math.abs(Number(data.monto_aplicado) - montoNum) >= 0.005) {
+        const detalle = `Registraste $${montoNum.toFixed(2)} pero el servidor aplicó $${Number(data.monto_aplicado).toFixed(2)}.`;
+        reportarErrorSync({
+          client_id: `a-${idempotencyKey}`, tipo: 'diferencia', metodo: 'POST',
+          endpoint: `/cobros/clientes/${cliente.id}/pagar`,
+          etiqueta: `Cobro ${cliente.nombre} — ${numeroRecibo}`, monto: montoNum, motivo: detalle,
+        });
+        Alert.alert('⚠️ El servidor guardó un monto distinto', `${detalle}
+
+Ya se avisó a la oficina. No entregues el recibo sin confirmarlo.`);
+      }
       // Preferir lo que confirma el servidor al momento del pago sobre lo
       // que ya traíamos por parámetro (mismo valor en la práctica, pero el
       // servidor es la fuente de verdad).
@@ -242,6 +270,11 @@ export default function RegistrarPagoScreen({ navigation, route }) {
                 monto: montoNum, metodo,
                 referencia: referencia.trim(), notas: notas.trim(),
               });
+              registrarCobroEnLibro({
+                id: idempotencyKey, usuarioId: user?.id, clienteId: cliente.id, clienteNombre: cliente.nombre,
+                ventaId, ventaNumero, numeroRecibo, monto: montoNum, metodo, referencia: referencia.trim(),
+                estado: 'pendiente', origen: 'offline',
+              });
               await guardarEnHistorial({
                 clienteId: cliente.id, clienteNombre: cliente.nombre, clienteCodigo: codigoCliente,
                 clienteWhatsapp: cliente.whatsapp || cliente.telefono || null,
@@ -269,6 +302,8 @@ export default function RegistrarPagoScreen({ navigation, route }) {
 
   const registrar = () => {
     if (!montoNum || montoNum <= 0) { Alert.alert('Monto inválido','Ingresa un monto mayor a 0'); return; }
+    const errMonto = validarMonto(montoNum, 'El monto del cobro');
+    if (errMonto) { Alert.alert('Monto inválido', errMonto); return; }
     if (!ventaId)                   { Alert.alert('Error','No se especificó la venta'); return; }
     if (saldoNum > 0 && montoNum > saldoNum) {
       Alert.alert('Monto excede el saldo', `El monto ($${montoNum.toFixed(2)}) supera el saldo pendiente ($${saldoNum.toFixed(2)}). ¿Deseas continuar?`,

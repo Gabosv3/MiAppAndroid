@@ -4,6 +4,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import api, { TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LISTA_RAPIDA } from '../services/listas';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
@@ -82,7 +83,7 @@ export default function HistorialRutaSupervisadaScreen({ route, navigation }) {
             <Text style={s.totalLabel}>Total cobrado hoy en esta ruta</Text>
             <Text style={s.totalVal}>{fmt(data?.total_cobrado)}</Text>
           </View>
-          <FlatList
+          <FlatList {...LISTA_RAPIDA}
             data={items}
             keyExtractor={i => i._key}
             renderItem={renderItem}

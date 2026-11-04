@@ -8,6 +8,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
 import api, { esErrorTransitorio } from '../services/api';
+import { LIMITES } from '../services/limites';
+import { comprimirFoto, PERFIL_FOTO } from '../services/fotos';
+import { obtenerUbicacion } from '../services/ubicacion';
 import * as offlineQueue from '../services/offlineQueue';
 import { useTheme } from '../context/ThemeContext';
 import { extractTextFromImage } from '../services/ocr';
@@ -133,7 +136,7 @@ export default function CrearClienteScreen({ navigation }) {
         Alert.alert('Permiso denegado', 'Debe permitir el acceso a la ubicación.');
         return;
       }
-      const position = await Location.getCurrentPositionAsync({});
+      const position = await obtenerUbicacion({ modo: 'alta' });
       setLatitud(position.coords.latitude.toString()); setLatError('');
       setLongitud(position.coords.longitude.toString()); setLongError('');
       Alert.alert('Ubicación capturada', 'Coordenadas registradas correctamente.');
@@ -152,11 +155,14 @@ export default function CrearClienteScreen({ navigation }) {
         Alert.alert('Permiso requerido', 'Necesitamos acceso a la cámara.');
         return;
       }
-      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 1.0 });
+      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.85 });
       if (!result.canceled && result.assets?.[0]) {
         setScanningOcr(true);
         try {
-          const datos = await extractTextFromImage(result.assets[0].uri);
+          // Se reduce a ~1600 px antes del reconocimiento: ML Kit lee igual de bien el
+          // DUI y tarda mucho menos (y usa menos RAM) que con la foto original de 12 MP.
+          const reducida = await comprimirFoto(result.assets[0], { ancho: 1600, calidad: 0.8 });
+          const datos = await extractTextFromImage(reducida.uri);
           if (datos) {
             const campos = [];
             if (datos.dui && !dui)           { handleDuiChange(datos.dui);           campos.push(`✅ DUI: ${datos.dui}`); }
@@ -184,7 +190,8 @@ export default function CrearClienteScreen({ navigation }) {
       if (status !== 'granted') { Alert.alert('Permiso requerido', 'Necesitamos acceso a la cámara.'); return; }
       const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.8 });
       if (!result.canceled && result.assets?.[0]) {
-        const imageFile = { uri: result.assets[0].uri, name: `dui_${side}_${Date.now()}.jpg`, type: 'image/jpeg' };
+        const reducida = await comprimirFoto(result.assets[0], PERFIL_FOTO.documento);
+        const imageFile = { uri: reducida.uri, name: `dui_${side}_${Date.now()}.jpg`, type: 'image/jpeg' };
         if (side === 'frente') { setDuiFrente(imageFile); setFrenteError(''); }
         else                   { setDuiReverso(imageFile); setReversoError(''); }
       }
@@ -201,8 +208,9 @@ export default function CrearClienteScreen({ navigation }) {
       }
       const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.8 });
       if (!result.canceled && result.assets?.[0]) {
+        const reducida = await comprimirFoto(result.assets[0]);
         setFotoCasa({
-          uri: result.assets[0].uri,
+          uri: reducida.uri,
           name: `casa_${Date.now()}.jpg`,
           type: 'image/jpeg',
         });
@@ -346,6 +354,34 @@ export default function CrearClienteScreen({ navigation }) {
           console.warn('[CrearCliente] no se pudo encolar:', errCola?.message || errCola);
           Alert.alert('No se guardó el cliente', `${errCola?.message || errCola}\n\nNo cierres esta pantalla: intenta de nuevo.`);
         }
+      } else if (error.campos?.dui || error.campos?.email) {
+        // DUI o correo ya registrados: en vez de un error genérico se muestra QUIÉN
+        // es el cliente existente, para usarlo en la venta o el cobro en lugar de
+        // crear uno nuevo. (/clientes?q= busca por DUI y funciona para cualquier rol.)
+        const porDui = !!error.campos?.dui;
+        let existente = '';
+        if (porDui) {
+          try {
+            const { data: busqueda } = await api.get('/clientes', { params: { q: dui.trim(), per_page: 5 } });
+            const lista = Array.isArray(busqueda) ? busqueda : (busqueda?.data || []);
+            const c = lista.find((x) => String(x.dui || '').trim() === dui.trim());
+            if (c) {
+              existente = `
+
+Ya existe: ${[c.nombre, c.apellido].filter(Boolean).join(' ')}`
+                + `${c.codigo_anterior ? ` (código ${c.codigo_anterior})` : ''}`
+                + `${c.telefono_normal ? ` · Tel. ${c.telefono_normal}` : ''}.`;
+            }
+          } catch (e) {
+            console.warn('[CrearCliente] no se pudo buscar al cliente existente:', e?.message || e);
+          }
+        }
+        Alert.alert(
+          porDui ? 'Ese DUI ya está registrado' : 'Ese correo ya está registrado',
+          `${errorMessage}${existente}
+
+No se creó un cliente nuevo. Búscalo por nombre o código y úsalo en la venta o el cobro.`
+        );
       } else {
         Alert.alert('Error', errorMessage);
       }
@@ -364,6 +400,10 @@ export default function CrearClienteScreen({ navigation }) {
     }
     if (!apellido.trim()) {
       setApellidoError('Requerido');
+      valid = false;
+    }
+    if (dui.trim().length > LIMITES.DUI_MAX) {
+      setDuiError(`El DUI no puede pasar de ${LIMITES.DUI_MAX} caracteres`);
       valid = false;
     }
     if (!duiRegex.test(dui.trim())) {
@@ -403,6 +443,9 @@ export default function CrearClienteScreen({ navigation }) {
     // impedir crear el cliente por eso. Se puede completar después.
     if (emailRequerido && !email.trim()) {
       setEmailError('El email es requerido');
+      valid = false;
+    } else if (email.trim().length > LIMITES.EMAIL_MAX) {
+      setEmailError(`El correo no puede pasar de ${LIMITES.EMAIL_MAX} caracteres`);
       valid = false;
     } else if (email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       setEmailError('Formato de email inválido');

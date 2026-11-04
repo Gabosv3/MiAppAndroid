@@ -8,6 +8,7 @@ import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
 import * as localDb from '../services/localDb';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LISTA_RAPIDA } from '../services/listas';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 const initials = (name = '') => name.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() || '').join('');
@@ -333,7 +334,7 @@ export default function RegistrarPreventaScreen({ navigation }) {
               autoFocus
             />
             {buscandoCliente && <ActivityIndicator style={{ marginTop: 10 }} color="#1565C0" />}
-            <FlatList
+            <FlatList {...LISTA_RAPIDA}
               data={clientes}
               keyExtractor={c => String(c.id)}
               style={{ maxHeight: 320, marginTop: 10 }}
@@ -374,7 +375,7 @@ export default function RegistrarPreventaScreen({ navigation }) {
                 Sin conexión — el catálogo de productos no está disponible offline.
               </Text>
             )}
-            <FlatList
+            <FlatList {...LISTA_RAPIDA}
               data={productos}
               keyExtractor={p => String(p.id)}
               style={{ maxHeight: 320, marginTop: 10 }}

@@ -1,12 +1,13 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
-import api, { setAuthToken, clearAuthToken, setSesionExpiradaListener } from '../services/api';
+import api, { setAuthToken, clearAuthToken, setSesionExpiradaListener, setSesionActiva } from '../services/api';
+import { setUsuarioActual } from '../services/usuarioActual';
 import { startHeartbeat, stopHeartbeat } from '../services/posHeartbeat';
 import { verificarActualizacion } from '../services/updateChecker';
 import { limpiarCacheOffline } from '../services/cobrosOffline';
 import { clearOfflineData } from '../services/localDb';
-import { clearQueue } from '../services/offlineQueue';
 import { registrarPushToken, eliminarPushToken } from '../services/pushNotifications';
 import { removePin } from '../services/appLock';
 import { asegurarConfiguradoTrasLogin } from '../services/backupOffline';
@@ -98,20 +99,75 @@ export function AuthProvider({ children }) {
     return () => setSesionExpiradaListener(null);
   }, []);
 
+  // Mantiene el módulo de api al día con la sesión: (1) con usuario en pantalla un 401
+  // cierra la sesión; (2) si por cualquier motivo el token no estuviera cargado en
+  // memoria, se vuelve a cargar desde el usuario; (3) las colas offline saben de quién
+  // es cada operación.
   useEffect(() => {
+    setSesionActiva(!!user);
+    setUsuarioActual(user?.id ?? null);
+    if (user?.token) setAuthToken(user.token);
+  }, [user]);
+
+  // Al volver a la app desde segundo plano se valida la sesión de inmediato: si el
+  // token murió mientras estaba cerrada, se cierra la sesión en ese momento en vez
+  // de esperar a que alguna pantalla falle. (El 401 lo maneja el interceptor.)
+  const ultimaValidacion = useRef(0);
+  const usuarioRef = useRef(null);
+  useEffect(() => { usuarioRef.current = user; }, [user]);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (estado) => {
+      if (estado !== 'active' || !usuarioRef.current) return;
+      if (Date.now() - ultimaValidacion.current < 60 * 1000) return;
+      ultimaValidacion.current = Date.now();
+      api.get('/me', { timeout: 10000, precarga: true }).catch(() => { /* sin red: no es motivo para cerrar */ });
+    });
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
+    // Restaurar la sesión SIN esperar la red. Antes se hacía await de GET /me
+    // (hasta 20 s) con la pantalla de Login a la vista, y ante CUALQUIER error
+    // — también sin señal al arrancar el día — se cerraba la sesión y se
+    // borraban las credenciales del acceso offline. Ahora se entra de inmediato
+    // con el usuario guardado y /me se valida en segundo plano: solo un 401
+    // (token revocado/vencido) cierra la sesión, y eso ya lo maneja el
+    // interceptor de api.js a través del listener de arriba.
     const restoreAuth = async () => {
-      const stored = await loadAuthData();
+      let stored = null;
+      try { stored = await loadAuthData(); } catch (e) { console.warn('[Auth] no se pudo leer la sesión:', e?.message || e); }
+
+      if (stored?.token && stored.user) {
+        setAuthToken(stored.token);
+        setUser({ ...stored.user, token: stored.token });
+        setInitialized(true);
+        startHeartbeat();
+        verificarActualizacion();
+        registrarPushToken();
+        // Validación y refresco de permisos en segundo plano
+        api.get('/me', { timeout: 15000, precarga: true })
+          .then(({ data: me }) => {
+            setUser((actual) => (actual ? { ...me, token: stored.token } : actual));
+            const { token: _omitir, ...sinToken } = { ...me, token: stored.token };
+            AsyncStorage.setItem(STORAGE_KEY_USER, JSON.stringify(sinToken)).catch(() => {});
+          })
+          .catch((e) => console.warn('[Auth] /me en segundo plano falló (se mantiene la sesión):', e?.message || e));
+        return;
+      }
+
       if (stored?.token) {
+        // Hay token pero no el usuario guardado (versión anterior de la app): se
+        // necesita /me una vez. Sin señal NO se borran las credenciales.
         setAuthToken(stored.token);
         try {
-          const { data: me } = await api.get('/me');
+          const { data: me } = await api.get('/me', { timeout: 15000 });
           setUser({ ...me, token: stored.token });
           startHeartbeat();
           verificarActualizacion();
           registrarPushToken();
-        } catch {
+        } catch (e) {
           clearAuthToken();
-          await removeAuthData();
+          if (e?.status === 401) await removeAuthData().catch(() => {});
           setUser(null);
         }
       }
@@ -236,7 +292,9 @@ export function AuthProvider({ children }) {
       removeAuthData(),
       limpiarCacheOffline(),
       clearOfflineData(),
-      clearQueue(),
+      // La cola de operaciones pendientes YA NO se borra al cerrar sesión: cada
+      // operación lleva el id de quien la creó y solo ese usuario la envía. Antes
+      // un cierre de sesión con ventas/cobros sin enviar los perdía en silencio.
       removePin(),
     ]);
   };

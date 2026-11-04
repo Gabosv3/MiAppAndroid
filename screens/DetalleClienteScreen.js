@@ -7,6 +7,11 @@ import { useFocusEffect } from '@react-navigation/native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import api, { esErrorTransitorio, TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { asegurarHttps } from '../services/seguridad';
+import { validarMonto } from '../services/limites';
+import { registrarCobroEnLibro } from '../services/libroLocal';
+import { comprimirFoto } from '../services/fotos';
+import { obtenerUbicacion } from '../services/ubicacion';
+import FotoRemota from '../components/FotoRemota';
 import { useConnectivity } from '../services/connectivity';
 import { guardarClienteCache, leerClienteCache, generarNumeroRecibo, encolarPago, guardarEnHistorial, marcarClienteVisitado } from '../services/cobrosOffline';
 import * as offlineQueue from '../services/offlineQueue';
@@ -34,6 +39,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState('');
   const [esCache,      setEsCache]      = useState(false);
+  const [actualizando, setActualizando] = useState(false);
   const [updatingUbic,  setUpdatingUbic]  = useState(false);
   const [modalCoords,   setModalCoords]   = useState(false);
   const [coordsTexto,   setCoordsTexto]   = useState('');
@@ -64,7 +70,8 @@ export default function DetalleClienteScreen({ navigation, route }) {
       if (status !== 'granted') { Alert.alert('Permiso requerido', 'Necesitamos acceso a la cámara.'); return; }
       const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7 });
       if (!result.canceled && result.assets?.[0]) {
-        const foto = { uri: result.assets[0].uri, name: `garantia_${Date.now()}.jpg`, type: 'image/jpeg' };
+        const reducida = await comprimirFoto(result.assets[0]);
+        const foto = { uri: reducida.uri, name: `garantia_${Date.now()}.jpg`, type: 'image/jpeg' };
         setGarFotos(prev => [...prev, foto]);
       }
     } catch (e) {
@@ -90,6 +97,8 @@ export default function DetalleClienteScreen({ navigation, route }) {
   const [buscandoVinc,    setBuscandoVinc]    = useState(false);
   const [vinculando,      setVinculando]      = useState(false);
   const [modalAbonoGrupo, setModalAbonoGrupo] = useState(false);
+  // 'grupo' = cuentas de varios clientes vinculados; 'ventas' = todas las ventas de ESTE cliente.
+  const [modoAbono, setModoAbono] = useState('grupo');
   const [cuentasAbonoGrupo, setCuentasAbonoGrupo] = useState([]); // [{ venta_id, cliente_id, clienteNombre, producto, saldo }]
   const [montosPorCuenta, setMontosPorCuenta] = useState({}); // { [venta_id]: '12.50' }
   const [metodoAbonoGrupo, setMetodoAbonoGrupo] = useState('efectivo');
@@ -214,6 +223,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
       Alert.alert('Sin cuentas', 'No hay cuentas con saldo pendiente en este grupo.');
       return;
     }
+    setModoAbono('grupo');
     setCuentasAbonoGrupo(cuentas);
     // Arranca en blanco (no con el saldo completo) — el cobrador debe teclear
     // a propósito cuánto recibió en cada cuenta; si se equivoca, el saldo que
@@ -223,6 +233,49 @@ export default function DetalleClienteScreen({ navigation, route }) {
     setOpcionVisitaGrupo('14');
     setFechaVisitaGrupo(new Date());
     setModalAbonoGrupo(true);
+  };
+
+  // Ventas de ESTE cliente que todavía deben algo, de la más antigua a la más nueva.
+  const ventasConSaldo = (data?.ventas || [])
+    .filter(v => Number(v.saldo_pendiente) > 0.004)
+    .slice()
+    .sort((a, b) => a.id - b.id);
+
+  // "Cobrar todas las ventas": un solo cobro donde el cobrador reparte lo recibido entre
+  // las ventas del cliente (cada producto). Reutiliza el mismo flujo del abono grupal:
+  // una confirmación, un recibo consolidado y cada venta queda con su propio recibo y
+  // su idempotency_key (si algo falla a medias se ve cuál cuenta no se aplicó).
+  const abrirModalCobrarTodasVentas = () => {
+    if (ventasConSaldo.length === 0) {
+      Alert.alert('Sin ventas con saldo', 'Este cliente no tiene ventas con saldo pendiente.');
+      return;
+    }
+    const nombreCliente = cliente?.nombre || clienteNombre || 'Cliente';
+    const cuentas = ventasConSaldo.map(v => ({
+      venta_id: v.id,
+      venta_numero: v.numero_venta,
+      producto: v.producto,
+      saldo: Number(v.saldo_pendiente),
+      // La cuota que toca pagar ahora (la primera no cobrada), para el atajo "Cuota de cada una".
+      cuotaSiguiente: Number((v.cuotas || []).find(c => c.estado !== 'cobrado')?.saldo_pendiente) || null,
+      cliente_id: clienteId,
+      clienteNombre: nombreCliente,
+    }));
+    setModoAbono('ventas');
+    setCuentasAbonoGrupo(cuentas);
+    setMontosPorCuenta(Object.fromEntries(cuentas.map(c => [c.venta_id, ''])));
+    setMetodoAbonoGrupo('efectivo');
+    setOpcionVisitaGrupo('14');
+    setFechaVisitaGrupo(new Date());
+    setModalAbonoGrupo(true);
+  };
+
+  // Atajos del modo "todas las ventas": llenar cada monto sin teclear uno por uno.
+  const llenarMontos = (campo) => {
+    setMontosPorCuenta(Object.fromEntries(cuentasAbonoGrupo.map(c => {
+      const valor = campo === 'cuota' ? (c.cuotaSiguiente ?? c.saldo) : c.saldo;
+      return [c.venta_id, Number(valor).toFixed(2)];
+    })));
   };
 
   // Antes de aplicar, pide confirmación mostrando exactamente qué se va a
@@ -235,9 +288,16 @@ export default function DetalleClienteScreen({ navigation, route }) {
     const cuentasProcesar = cuentasAbonoGrupo
       .map(cta => ({ ...cta, aPagar: parseFloat(montosPorCuenta[cta.venta_id]) || 0 }));
 
+    for (const c of cuentasProcesar) {
+      if (c.aPagar > 0) {
+        const errMonto = validarMonto(c.aPagar, `El monto de ${c.clienteNombre}`);
+        if (errMonto) { Alert.alert('Monto inválido', errMonto); return; }
+      }
+    }
+
     const total = cuentasProcesar.reduce((s, c) => s + c.aPagar, 0);
     const detalle = cuentasProcesar
-      .map(c => `• ${c.clienteNombre}: ${c.aPagar > 0 ? fmt(c.aPagar) : 'No abona'}`)
+      .map(c => `• ${modoAbono === 'ventas' ? (c.producto || c.venta_numero) : c.clienteNombre}: ${c.aPagar > 0 ? fmt(c.aPagar) : 'No abona'}`)
       .join('\n');
     Alert.alert(
       '¿Confirmar abono grupal?',
@@ -347,6 +407,11 @@ export default function DetalleClienteScreen({ navigation, route }) {
           ventaId: cta.venta_id, ventaNumero: cta.venta_numero || null, numeroRecibo,
           monto: aPagar, metodo: metodoAbonoGrupo,
         });
+        registrarCobroEnLibro({
+          id: idempotencyKey, usuarioId: user?.id, clienteId: cta.cliente_id, clienteNombre: cta.clienteNombre,
+          ventaId: cta.venta_id, ventaNumero: cta.venta_numero || null, numeroRecibo, monto: aPagar,
+          metodo: metodoAbonoGrupo, estado: 'pendiente', origen: 'offline',
+        });
         await guardarEnHistorial({
           clienteId: cta.cliente_id, clienteNombre: cta.clienteNombre,
           ventaNumero: cta.venta_numero || null, numeroRecibo, producto: cta.producto,
@@ -370,6 +435,11 @@ export default function DetalleClienteScreen({ navigation, route }) {
             metodo_pago: metodoAbonoGrupo,
             venta_id: cta.venta_id,
             idempotency_key: idempotencyKey,
+          });
+          registrarCobroEnLibro({
+            id: idempotencyKey, usuarioId: user?.id, clienteId: cta.cliente_id, clienteNombre: cta.clienteNombre,
+            ventaId: cta.venta_id, ventaNumero: cta.venta_numero || null, numeroRecibo: data?.numero_recibo || null,
+            monto: aPagar, metodo: metodoAbonoGrupo, estado: 'enviado', origen: 'online',
           });
           resultado = { numeroRecibo: data?.numero_recibo || null, ok: true, offline: false };
         } catch (e) {
@@ -414,7 +484,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
     if (fallidas.length > 0) {
       Alert.alert(
         `${fallidas.length} cuenta(s) NO se aplicaron`,
-        fallidas.map(a => `• ${a.clienteNombre} (${a.sinPago ? 'visita' : fmt(a.monto)}): ${a.motivo || 'error desconocido'}`).join('\n')
+        fallidas.map(a => `• ${a.clienteNombre}${a.producto ? ` — ${a.producto}` : ''} (${a.sinPago ? 'visita' : fmt(a.monto)}): ${a.motivo || 'error desconocido'}`).join('\n')
       );
     }
   };
@@ -433,23 +503,31 @@ export default function DetalleClienteScreen({ navigation, route }) {
         return;
       }
 
-      if (isOnline) {
-        // Si YA hay un respaldo de este cliente, vale la pena fallar rápido
-        // (timeout corto) porque hay algo decente que mostrar si la
-        // conexión está lenta. Pero si nunca se ha guardado nada de este
-        // cliente (ej. primera vez que se abre hoy), cortar a los 8s solo
-        // deja al cobrador con una pantalla de error en vez de dejar que
-        // una conexión lenta-pero-funcional termine de responder — ahí es
-        // mejor tener paciencia (timeout normal) que fallar rápido.
-        const cachePrevio = await leerClienteCache(clienteId);
-        const timeout = cachePrevio ? TIMEOUT_LECTURA_CACHE : undefined;
-        const res = await api.get(`/cobros/clientes/${clienteId}`, timeout ? { timeout } : undefined);
+      // Stale-while-revalidate: lo guardado se muestra AL INSTANTE y se refresca por
+      // detrás. Antes se esperaba la respuesta del servidor (hasta 8-20 s con red
+      // lenta) con el spinner a la vista, aunque el cliente ya estuviera guardado
+      // desde la precarga del día.
+      let cache = null;
+      try { cache = await leerClienteCache(clienteId); } catch { cache = null; }
+      const hayCache = !!cache?.data?.cliente;
+      if (hayCache) {
+        setData(cache.data);
+        setEsCache(!isOnline);
+        setLoading(false);
+      }
 
-        // Antes, si por lo que sea el servidor respondía 200 pero sin el
-        // objeto "cliente" (respuesta inesperada, interceptor raro, etc.),
-        // esto se guardaba y pintaba tal cual — pantalla en blanco sin
-        // ningún aviso. Ahora, si no viene el cliente, se trata como una
-        // respuesta inválida y cae al mismo manejo que un error de red.
+      if (!isOnline) {
+        if (!hayCache) setError('Sin conexión y no hay datos guardados para este cliente.');
+        return;
+      }
+
+      setActualizando(true);
+      try {
+        // Con algo ya en pantalla se falla rápido; sin nada se espera el tiempo normal.
+        const res = await api.get(`/cobros/clientes/${clienteId}`, hayCache ? { timeout: TIMEOUT_LECTURA_CACHE } : undefined);
+
+        // Si el servidor responde 200 pero sin el objeto "cliente", se trata como
+        // una respuesta inválida (antes se pintaba tal cual: pantalla en blanco).
         if (!res?.data?.cliente) {
           throw new Error('El servidor respondió sin los datos del cliente.');
         }
@@ -458,20 +536,20 @@ export default function DetalleClienteScreen({ navigation, route }) {
         setData(res.data);
         setEsCache(false);
         setFotoError(false);
-      } else {
-        const cache = await leerClienteCache(clienteId);
-        if (cache?.data?.cliente) { setData(cache.data); setEsCache(true); }
-        else setError('Sin conexión y no hay datos guardados para este cliente.');
+      } catch (errRed) {
+        // Falló el refresco: se queda lo guardado si lo hay.
+        if (hayCache) setEsCache(true);
+        else setError(errRed?.message || 'Error');
+      } finally {
+        setActualizando(false);
       }
     } catch(e) {
-      const cache = await leerClienteCache(clienteId);
-      if (cache?.data?.cliente) { setData(cache.data); setEsCache(true); }
-      else setError(e?.message||'Error');
+      setError(e?.message||'Error');
     }
     finally { setLoading(false); }
   }, [clienteId, isOnline]);
 
-  useFocusEffect(useCallback(()=>{ setLoading(true); cargar(); },[cargar]));
+  useFocusEffect(useCallback(()=>{ cargar(); },[cargar]));
 
   // Guarda coordenadas (por GPS o pegadas a mano) — online con caída a la
   // cola offline, igual que el resto de la app.
@@ -511,7 +589,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
         Alert.alert('Permiso denegado', 'Necesitamos acceso a la ubicación.');
         return;
       }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const pos = await obtenerUbicacion({ modo: 'alta' });
       await guardarCoordenadas(pos.coords.latitude, pos.coords.longitude);
     } catch (e) {
       Alert.alert('Error', e?.message || 'No se pudo obtener la ubicación.');
@@ -786,6 +864,13 @@ export default function DetalleClienteScreen({ navigation, route }) {
           : (
         <ScrollView showsVerticalScrollIndicator={false}>
 
+          {/* Se muestra lo guardado mientras llega la versión nueva del servidor */}
+          {isOnline && actualizando && !esCache && (
+            <View style={s.offlineBanner}>
+              <Text style={s.offlineTxt}>🔄 Actualizando datos…</Text>
+            </View>
+          )}
+
           {/* Banner offline */}
           {(!isOnline || esCache) && (
             <View style={s.offlineBanner}>
@@ -842,8 +927,8 @@ export default function DetalleClienteScreen({ navigation, route }) {
                 <Text style={s.fotoCasaError}>No se pudo cargar la foto. Revisá tu conexión e intentá de nuevo.</Text>
               ) : (
                 <TouchableOpacity activeOpacity={0.9} onPress={() => setFotoAmpliada(true)}>
-                  <Image
-                    source={{ uri: asegurarHttps(cliente.foto_casa, api.defaults.baseURL) }}
+                  <FotoRemota
+                    uri={asegurarHttps(cliente.foto_casa, api.defaults.baseURL)}
                     style={s.fotoCasaImg}
                     resizeMode="cover"
                     onError={() => setFotoError(true)}
@@ -979,6 +1064,15 @@ export default function DetalleClienteScreen({ navigation, route }) {
 
           {/* ── Ventas ── */}
           <Text style={s.sectionTitle}>Ventas activas</Text>
+
+          {/* Con 2 o más ventas con saldo: cobrar todas de una sola vez */}
+          {ventasConSaldo.length >= 2 && (
+            <TouchableOpacity style={[s.abonarGrupoBtn, { marginHorizontal: 0, marginBottom: 12 }]} onPress={abrirModalCobrarTodasVentas}>
+              <Text style={s.abonarGrupoBtnTxt}>
+                💰 Cobrar todas las ventas ({ventasConSaldo.length}) · {fmt(ventasConSaldo.reduce((t, v) => t + Number(v.saldo_pendiente), 0))}
+              </Text>
+            </TouchableOpacity>
+          )}
 
           {ventas.map(venta => {
             return (
@@ -1324,17 +1418,38 @@ export default function DetalleClienteScreen({ navigation, route }) {
       <Modal visible={modalAbonoGrupo} transparent animationType="slide" onRequestClose={() => setModalAbonoGrupo(false)}>
         <View style={s.modalOverlay}>
           <View style={[s.modalBox, { maxHeight: '88%' }]}>
-            <Text style={s.modalTitle}>💰 Abonar a todas las cuentas</Text>
-            <Text style={s.modalSub}>Total del grupo: {fmt(grupo?.saldo_total_grupo)}</Text>
+            <Text style={s.modalTitle}>{modoAbono === 'ventas' ? '💰 Cobrar todas las ventas' : '💰 Abonar a todas las cuentas'}</Text>
+            <Text style={s.modalSub}>
+              {modoAbono === 'ventas'
+                ? `${cliente?.nombre || clienteNombre || ''} · Pendiente total: ${fmt(cuentasAbonoGrupo.reduce((t, c) => t + Number(c.saldo || 0), 0))}`
+                : `Total del grupo: ${fmt(grupo?.saldo_total_grupo)}`}
+            </Text>
 
             <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-              <Text style={s.modalLabel}>Monto por cuenta</Text>
+              <Text style={s.modalLabel}>{modoAbono === 'ventas' ? 'Monto por venta' : 'Monto por cuenta'}</Text>
+              {modoAbono === 'ventas' && (
+                <View style={{ flexDirection: 'row', gap: 16, marginBottom: 8 }}>
+                  <TouchableOpacity onPress={() => llenarMontos('cuota')}>
+                    <Text style={{ color: '#1565C0', fontWeight: '800', fontSize: 12 }}>Cuota de cada una</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => llenarMontos('saldo')}>
+                    <Text style={{ color: '#1565C0', fontWeight: '800', fontSize: 12 }}>Saldo completo</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => setMontosPorCuenta(Object.fromEntries(cuentasAbonoGrupo.map(c => [c.venta_id, ''])))}>
+                    <Text style={{ color: '#888', fontWeight: '800', fontSize: 12 }}>Borrar</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
               {cuentasAbonoGrupo.map(cta => (
                 <View key={cta.venta_id} style={s.cuentaAbonoRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={s.cuentaAbonoNombre}>{cta.clienteNombre}</Text>
+                    <Text style={s.cuentaAbonoNombre}>
+                      {modoAbono === 'ventas' ? (cta.producto || cta.venta_numero) : cta.clienteNombre}
+                    </Text>
                     <Text style={s.cuentaAbonoSub}>
-                      {cta.producto ? `${cta.producto} · ` : ''}Saldo: {fmt(cta.saldo)}
+                      {modoAbono === 'ventas'
+                        ? `${cta.venta_numero ? `${cta.venta_numero} · ` : ''}Saldo: ${fmt(cta.saldo)}`
+                        : `${cta.producto ? `${cta.producto} · ` : ''}Saldo: ${fmt(cta.saldo)}`}
                     </Text>
                   </View>
                   <TextInput
@@ -1459,7 +1574,7 @@ export default function DetalleClienteScreen({ navigation, route }) {
       <Modal visible={fotoAmpliada} transparent animationType="fade" onRequestClose={() => setFotoAmpliada(false)}>
         <TouchableOpacity style={s.fotoModalFondo} activeOpacity={1} onPress={() => setFotoAmpliada(false)}>
           {cliente?.foto_casa ? (
-            <Image source={{ uri: asegurarHttps(cliente.foto_casa, api.defaults.baseURL) }} style={s.fotoModalImg} resizeMode="contain" />
+            <FotoRemota uri={asegurarHttps(cliente.foto_casa, api.defaults.baseURL)} style={s.fotoModalImg} resizeMode="contain" />
           ) : null}
           <Text style={s.fotoModalCerrar}>Tocá para cerrar</Text>
         </TouchableOpacity>

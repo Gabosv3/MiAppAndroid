@@ -60,6 +60,15 @@ export const setSesionExpiradaListener = (fn) => { _onSesionExpirada = fn; };
 // Token a nivel de módulo para compartir con AuthContext sin pasar props
 let _token = null;
 
+// ¿Hay una sesión iniciada en la app (usuario en pantalla)? Se actualiza desde
+// AuthContext. Un 401 con sesión activa significa que el token murió (venció, lo
+// revocaron o se liberó el dispositivo) y la sesión debe cerrarse — aunque por
+// cualquier motivo el token no estuviera cargado en memoria: antes solo se cerraba
+// si el request llevaba token, y con un token ausente/muerto la persona se quedaba
+// en Inicio viendo "Unauthenticated" en cada pantalla.
+let _sesionActiva = false;
+export const setSesionActiva = (activa) => { _sesionActiva = !!activa; };
+
 export const setAuthToken = (token) => { _token = token; };
 export const clearAuthToken = () => { _token = null; };
 
@@ -83,6 +92,7 @@ api.interceptors.request.use((config) => {
     return Promise.reject(err);
   }
   if (_token) config.headers.Authorization = `Bearer ${_token}`;
+  config._tokenUsado = _token;
   if (!config.precarga) { _fgActivos += 1; config._contadoFg = true; }
   return config;
 });
@@ -93,7 +103,7 @@ const endpointDe = (error) =>
 // Cada fallo queda en el registro de depuración (visible en Diagnóstico) sin
 // bloquear el flujo: un 401 del ping de conectividad sin sesión es ruido.
 const registrarFalloApi = (error, estado, mensaje) => {
-  if (estado === 401 && !_token) return;
+  if (estado === 401 && !_token && !_sesionActiva) return;
   // El ping de /me y el heartbeat fallan cada pocos segundos sin red; se
   // registrarían cientos de veces y taparían los errores útiles.
   const url = error.config?.url || '';
@@ -117,7 +127,10 @@ api.interceptors.response.use(
       if (error.response.status >= 500) _onTransitorio?.(true);
       // Solo cuenta como sesión expirada si el request llevaba token: el ping
       // de ConnectivityProvider golpea /me sin sesión y ese 401 es esperado.
-      if (error.response.status === 401 && _token && !error.config?.url?.includes('/login')) {
+      // (Si el request se hizo con OTRO token — p. ej. una petición de la sesión anterior que
+      // responde tarde, ya con una sesión nueva — no debe cerrar la sesión actual.)
+      const tokenActual = (error.config?._tokenUsado ?? null) === _token;
+      if (error.response.status === 401 && tokenActual && (_token || _sesionActiva) && !error.config?.url?.includes('/login')) {
         _onSesionExpirada?.();
       }
       const { status, data } = error.response;

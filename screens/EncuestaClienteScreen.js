@@ -8,6 +8,7 @@ import api, { esErrorTransitorio, TIMEOUT_LECTURA_CACHE } from '../services/api'
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LISTA_RAPIDA } from '../services/listas';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 
@@ -177,7 +178,7 @@ ${e?.message || e}`);
             {cargandoClientes ? (
               <View style={s.center}><ActivityIndicator size="large" color="#1565C0" /></View>
             ) : (
-              <FlatList
+              <FlatList {...LISTA_RAPIDA}
                 data={clientesFiltrados}
                 keyExtractor={c => String(c.id)}
                 contentContainerStyle={{ padding: 16, paddingBottom: 32 }}

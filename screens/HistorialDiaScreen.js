@@ -12,6 +12,8 @@ import { useAuth } from '../context/AuthContext';
 import { leerHistorial, leerPagosPendientes } from '../services/cobrosOffline';
 import { fechaHoyLocal, fechaLocalDesdeISO, fmtFechaCorta } from '../services/dateUtils';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { escHtml } from '../services/html';
+import { LISTA_RAPIDA } from '../services/listas';
 
 // Normaliza la respuesta real de GET /cobros/historial (items mezcla pagos
 // y visitas, distinguidos por `tipo`) al mismo shape que usa el historial
@@ -131,12 +133,12 @@ const buildReciboHtml = ({ clienteNombre, clienteCodigo, ventaNumero, producto, 
     <div class="c b" style="font-size:14px">DISTRIBUIDORA BM</div>
     <div class="c">6047-9762</div>
     <div style="height:8px"></div>
-    <div class="row"><span class="b">${numeroRecibo||'N/A'}</span><span>${fechaFmt}</span></div>
+    <div class="row"><span class="b">${escHtml(numeroRecibo||'N/A')}</span><span>${fechaFmt}</span></div>
     <div class="div"></div>
-    <div><span class="b">${clienteNombre}</span>${clienteCodigo ? ` (${clienteCodigo})` : ''}</div>
-    ${producto ? `<div>${producto}</div>` : ''}
-    <div class="row"><span>Venta:</span><span>${ventaNumero||'N/A'}</span></div>
-    <div class="row"><span>Cobrador:</span><span>${nombreCobrador||''}</span></div>
+    <div><span class="b">${escHtml(clienteNombre)}</span>${clienteCodigo ? ` (${escHtml(clienteCodigo)})` : ''}</div>
+    ${producto ? `<div>${escHtml(producto)}</div>` : ''}
+    <div class="row"><span>Venta:</span><span>${escHtml(ventaNumero||'N/A')}</span></div>
+    <div class="row"><span>Cobrador:</span><span>${escHtml(nombreCobrador||'')}</span></div>
     <div class="row"><span>Pago:</span><span>${metodo ? metodo.charAt(0).toUpperCase()+metodo.slice(1) : ''}</span></div>
     <div class="div"></div>
     ${saldoAntes !== null && saldoAntes !== undefined ? `<div class="row"><span>Debía:</span><span>$${Number(saldoAntes).toFixed(2)}</span></div>` : ''}
@@ -353,7 +355,7 @@ export default function HistorialDiaScreen({ navigation }) {
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn}>
           <Text style={s.backTxt}>←</Text>
         </TouchableOpacity>
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={s.headerTitle}>Historial del día</Text>
           <Text style={s.headerSub}>
             {cobros.length} cobro{cobros.length !== 1 ? 's' : ''}
@@ -361,6 +363,13 @@ export default function HistorialDiaScreen({ navigation }) {
             {gastos.length > 0 ? `  ·  ${gastos.length} gasto${gastos.length !== 1 ? 's' : ''}` : ''}
           </Text>
         </View>
+        {/* Historial propio de la app vs. el del servidor: detecta diferencias de monto */}
+        <TouchableOpacity
+          onPress={() => navigation.navigate('Conciliacion')}
+          style={{ backgroundColor: 'rgba(255,255,255,0.18)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}
+        >
+          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>⚖️ Comparar</Text>
+        </TouchableOpacity>
       </View>
 
       {esCache && !loading && (
@@ -408,7 +417,7 @@ export default function HistorialDiaScreen({ navigation }) {
             )}
           </>
         )}
-        <FlatList
+        <FlatList {...LISTA_RAPIDA}
           data={items}
           keyExtractor={i => i.id}
           renderItem={renderItem}

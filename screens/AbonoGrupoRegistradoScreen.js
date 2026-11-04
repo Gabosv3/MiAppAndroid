@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
@@ -6,6 +6,7 @@ import * as Sharing from 'expo-sharing';
 import { fmtFechaCorta, fechaHoyLocal } from '../services/dateUtils';
 import { enviarReciboPorWhatsApp, htmlPieInformativo, htmlMetodosPago } from '../services/reciboWhatsApp';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { escHtml } from '../services/html';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 const capitalizar = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
@@ -25,8 +26,8 @@ const buildHtmlRecibo = ({ aplicados, metodo, proximaVisita, nombreCobrador, pdf
 
   const filasHtml = aplicados.map(a => `
     <div style="padding:4px 0">
-      <div class="row"><span class="b">${a.ok ? '✔' : '✘'} ${a.clienteNombre}</span><span class="b">${a.sinPago ? '' : (a.numeroRecibo || (a.ok ? '' : 'ERROR'))}</span></div>
-      ${a.producto ? `<div style="font-size:${px(10)}px;color:#666">${a.producto}</div>` : ''}
+      <div class="row"><span class="b">${a.ok ? '✔' : '✘'} ${escHtml(a.clienteNombre)}</span><span class="b">${a.sinPago ? '' : (a.numeroRecibo || (a.ok ? '' : 'ERROR'))}</span></div>
+      ${a.producto ? `<div style="font-size:${px(10)}px;color:#666">${escHtml(a.producto)}</div>` : ''}
       ${a.ok && a.sinPago ? `
       <div class="row" style="margin-top:2px"><span>Debía:</span><span style="color:#c62828">${fmt(a.saldoAntes)}</span></div>
       <div class="row"><span style="color:#e65100;font-weight:800">No abonó</span><span></span></div>
@@ -115,7 +116,12 @@ export default function AbonoGrupoRegistradoScreen({ navigation, route }) {
     huboOffline,
   } = route.params;
 
+  // Solo la primera vez que se muestra: sin esta guarda el diálogo de impresión
+  // volvía a abrirse cada vez que la pantalla recuperaba el foco.
+  const yaImprimio = useRef(false);
   useFocusEffect(useCallback(() => {
+    if (yaImprimio.current) return;
+    yaImprimio.current = true;
     imprimirRecibo({ aplicados, metodo, proximaVisita, nombreCobrador });
   }, []));
 

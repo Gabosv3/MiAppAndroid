@@ -13,6 +13,7 @@ import { fechaHoyLocal, fechaLocalDesdeISO } from '../services/dateUtils';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ClienteDatosModal from '../components/ClienteDatosModal';
 import { htmlMetodosPago } from '../services/reciboWhatsApp';
+import { LISTA_RAPIDA } from '../services/listas';
 
 const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
 const hora = (iso) => {
@@ -450,7 +451,7 @@ Las ventas guardadas sin conexión aparecerán aquí cuando se envíen.`);
             <Text style={s.resumenTotal}>{fmt(totalDia)}</Text>
           </View>
 
-          <FlatList
+          <FlatList {...LISTA_RAPIDA}
             data={ventas}
             keyExtractor={v => String(v.id)}
             renderItem={renderItem}

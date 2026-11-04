@@ -9,6 +9,8 @@ import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
 import { precargarDia, precargaHechaHoy } from '../services/precargaDia';
 import { avisarRechazados } from '../services/rechazados';
+import { conciliarEnSegundoPlano } from '../services/libroLocal';
+import api from '../services/api';
 import CustomDrawer from '../navigation/CustomDrawerContent';
 import Constants from 'expo-constants';
 import { verificarActualizacion, versionActual } from '../services/updateChecker';
@@ -41,6 +43,8 @@ export default function HomeScreen({ navigation }) {
         const count = await offlineQueue.getQueueCount();
         if (count > 0) await offlineQueue.syncQueue();
         avisarRechazados();
+        // Compara lo registrado hoy en la app contra el servidor (en segundo plano).
+        if (user?.perfil?.es_cobrador || user?.perfil?.es_supervisor) conciliarEnSegundoPlano({ api, usuarioId: user?.id });
       } catch (_) { console.warn('[HomeScreen] fallo ignorado:', _?.message || _); }
       syncing.current = false;
     })();

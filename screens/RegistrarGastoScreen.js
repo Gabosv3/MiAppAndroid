@@ -6,6 +6,8 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import api, { esErrorTransitorio, TIMEOUT_LECTURA_CACHE } from '../services/api';
+import { validarMonto } from '../services/limites';
+import { comprimirFoto } from '../services/fotos';
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
 import { guardarVehiculosCache, leerVehiculosCache } from '../services/cobrosOffline';
@@ -68,7 +70,8 @@ export default function RegistrarGastoScreen({ navigation }) {
       const result = await ImagePicker.launchCameraAsync({ quality: 0.75, allowsEditing: false });
       if (!result.canceled && result.assets?.length > 0) {
         const a = result.assets[0];
-        setComprobante({ uri: a.uri, type: a.mimeType || 'image/jpeg', name: 'comprobante.jpg' });
+        const reducida = await comprimirFoto(a);
+        setComprobante({ uri: reducida.uri, type: 'image/jpeg', name: 'comprobante.jpg' });
       }
     } catch (e) {
       Alert.alert('Error', 'No se pudo abrir la cámara: ' + (e?.message || String(e)));
@@ -90,6 +93,8 @@ export default function RegistrarGastoScreen({ navigation }) {
 
   const enviar = async () => {
     if (!puedeEnviar) return;
+    const errMonto = validarMonto(montoNum, 'El monto del gasto');
+    if (errMonto) { Alert.alert('Monto inválido', errMonto); return; }
     setSubmitting(true);
 
     // Generada una vez, antes del primer intento, y reutilizada si el vale

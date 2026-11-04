@@ -4,6 +4,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import api, { TIMEOUT_LECTURA_CACHE } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LISTA_RAPIDA } from '../services/listas';
 
 export default function RutasSupervisadasScreen({ navigation }) {
   const insets = useSafeAreaInsets();
@@ -82,7 +83,7 @@ export default function RutasSupervisadasScreen({ navigation }) {
           <Text style={s.errorTxt}>{error}</Text>
         </View>
       ) : (
-        <FlatList
+        <FlatList {...LISTA_RAPIDA}
           data={rutas}
           keyExtractor={r => String(r.id)}
           renderItem={renderItem}

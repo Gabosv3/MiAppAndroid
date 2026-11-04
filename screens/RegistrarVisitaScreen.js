@@ -9,6 +9,8 @@ import * as Location from 'expo-location';
 import api, { esErrorTransitorio } from '../services/api';
 import { useConnectivity } from '../services/connectivity';
 import * as offlineQueue from '../services/offlineQueue';
+import { comprimirFoto } from '../services/fotos';
+import { obtenerUbicacion } from '../services/ubicacion';
 import { guardarEnHistorial, marcarClienteVisitado } from '../services/cobrosOffline';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -66,7 +68,7 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
       setCapturandoGps(true);
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const pos = await obtenerUbicacion({ modo: 'rapida' });
       setUbicacion({ lat: pos.coords.latitude, lng: pos.coords.longitude });
     } catch (_) { console.warn('[RegistrarVisitaScreen] fallo ignorado:', _?.message || _); }
     finally { setCapturandoGps(false); }
@@ -87,7 +89,8 @@ export default function RegistrarVisitaScreen({ navigation, route }) {
       });
       if (!result.canceled && result.assets?.length > 0) {
         const asset = result.assets[0];
-        setFoto({ uri: asset.uri, type: asset.mimeType || 'image/jpeg', name: 'foto_hogar.jpg' });
+        const reducida = await comprimirFoto(asset);
+        setFoto({ uri: reducida.uri, type: 'image/jpeg', name: 'foto_hogar.jpg' });
         // GPS se captura en segundo plano sin que el cobrador lo vea
         capturarGpsSilencioso();
       }

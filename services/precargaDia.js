@@ -156,6 +156,7 @@ export const precargarDia = (perfil, onProgreso) => {
     const errores = [];
     let total = 0;
     let descargados = 0;
+    let sesionMuerta = false;
     try {
       if (perfil?.es_cobrador) {
         try {
@@ -164,9 +165,12 @@ export const precargarDia = (perfil, onProgreso) => {
           descargados = r.descargados;
         } catch (e) {
           errores.push(`Ruta del día: ${e?.message || e}`);
+          // 401: la sesión murió (api.js ya la está cerrando). No tiene sentido seguir
+          // pidiendo categorías y clientes con un token inválido.
+          if (e?.status === 401) sesionMuerta = true;
         }
       }
-      if (perfil?.es_vendedor) {
+      if (perfil?.es_vendedor && !sesionMuerta) {
         onProgreso?.({ fase: 'ventas', hechos: 0, total: 0 });
         await precargarVentas(errores);
       }

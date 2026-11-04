@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from './api';
 import * as backupOffline from './backupOffline';
 import { reportarErrorSync } from './reporteSync';
+import { getUsuarioActual } from './usuarioActual';
 
 const QUEUE_KEY = 'OFFLINE_REQUEST_QUEUE';
 const REJECTED_KEY = 'OFFLINE_REQUEST_REJECTED';
@@ -92,6 +93,7 @@ export const enqueueRequest = async ({ method, url, data, label, useFormData = f
     data: payload,
     useFormData: Boolean(useFormData),
     createdAt: new Date().toISOString(),
+    usuarioId: getUsuarioActual(),
   };
   await conBloqueo(async () => {
     const queue = await getRawQueue();
@@ -184,6 +186,11 @@ const _syncQueueInterno = async () => {
   }
 
   for (const item of queue) {
+    // Una operación de OTRO usuario (la sesión murió y alguien más inició sesión en este
+    // teléfono) NO se envía con la identidad equivocada: espera a que su dueño vuelva a entrar.
+    const actual = getUsuarioActual();
+    if (item.usuarioId != null && actual != null && item.usuarioId !== actual) continue;
+
     console.log(`\n📤 ITEM: ${item.label}`);
     console.log(`   Método: ${item.method}`);
     console.log(`   URL: ${item.url}`);

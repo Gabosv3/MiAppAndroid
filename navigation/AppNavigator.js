@@ -19,6 +19,7 @@ import RegistrarVisitaScreen from '../screens/RegistrarVisitaScreen';
 import RegistrarGastoScreen from '../screens/RegistrarGastoScreen';
 import MisValesScreen from '../screens/MisValesScreen';
 import DirectorioClientesScreen from '../screens/DirectorioClientesScreen';
+import ConciliacionScreen from '../screens/ConciliacionScreen';
 import PerfilClienteScreen from '../screens/PerfilClienteScreen';
 import AbonoGrupoRegistradoScreen from '../screens/AbonoGrupoRegistradoScreen';
 import ReporteDiarioScreen from '../screens/ReporteDiarioScreen';
@@ -80,6 +81,7 @@ export default function AppNavigator() {
           <Stack.Screen name="RegistrarGasto"   component={RegistrarGastoScreen}   options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="MisVales"         component={MisValesScreen}         options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="DirectorioClientes" component={DirectorioClientesScreen} options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="Conciliacion"     component={ConciliacionScreen}     options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="PerfilCliente"    component={PerfilClienteScreen}    options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="AbonoGrupoRegistrado" component={AbonoGrupoRegistradoScreen} options={{ animation: 'fade' }} />
           <Stack.Screen name="ReporteDiario"    component={ReporteDiarioScreen}    options={{ animation: 'slide_from_right' }} />

@@ -2,6 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fechaHoyLocal, fechaLocalDesde } from './dateUtils';
 import * as backupOffline from './backupOffline';
 import { reportarErrorSync } from './reporteSync';
+import { actualizarEntradaLibro } from './libroLocal';
+import { getUsuarioActual } from './usuarioActual';
 
 // Candado por clave: casi todo aquí es leer-modificar-escribir sobre un mismo
 // JSON de AsyncStorage. Sin esto, dos operaciones casi simultáneas (ej. un
@@ -173,6 +175,24 @@ export const guardarClientesCacheBatch = async (entradas, { sobrescribir = false
   );
 };
 
+// ─── PERFIL DEL CLIENTE (solo lectura) ───────────────────────────────────────
+// Una clave por perfil visitado: se muestra al instante al volver a abrirlo (y
+// sin señal) mientras el servidor refresca. Se borra al cerrar sesión.
+const PREFIJO_PERFIL = 'COBROS_PERFIL_';
+
+export const guardarPerfilCache = async (clienteId, data) => {
+  try {
+    await AsyncStorage.setItem(PREFIJO_PERFIL + clienteId, JSON.stringify({ data, savedAt: Date.now() }));
+  } catch (e) { console.warn('[cobrosOffline] no se pudo guardar el perfil:', e?.message || e); }
+};
+
+export const leerPerfilCache = async (clienteId) => {
+  try {
+    const raw = await AsyncStorage.getItem(PREFIJO_PERFIL + clienteId);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+};
+
 // ─── VEHÍCULOS DISPONIBLES (para vales de gasto) ─────────────────────────────
 // Sin esto, registrar un gasto de vehículo era imposible sin señal: la lista
 // de vehículos solo se pedía en línea.
@@ -200,6 +220,7 @@ export const encolarPago = async ({ id, clienteId, clienteNombre, ventaId, venta
     clienteId, clienteNombre, ventaId, ventaNumero, numeroRecibo,
     monto, metodo, referencia, notas,
     creadoEn: new Date().toISOString(),
+    usuarioId: getUsuarioActual(),
   };
   await conBloqueo(KEYS.pagos, async () => {
     const cola = await leerArreglo(KEYS.pagos);
@@ -375,7 +396,7 @@ export const marcarClienteVisitado = (clienteId) => conBloqueo(KEYS.visitados, a
 // cobros que aún no se sincronizaron.
 export const limpiarCacheOffline = async () => {
   const claves = await AsyncStorage.getAllKeys();
-  const deClientes = claves.filter((k) => k.startsWith(PREFIJO_CLIENTE));
+  const deClientes = claves.filter((k) => k.startsWith(PREFIJO_CLIENTE) || k.startsWith(PREFIJO_PERFIL));
   await AsyncStorage.multiRemove([
     ...deClientes,
     KEYS.ruta,
@@ -432,6 +453,9 @@ const _sincronizarPagosPendientesInterno = async (api) => {
   const errores = [];
 
   for (const pago of cola) {
+    // Un cobro de OTRO usuario no se envía con la sesión actual (ver offlineQueue).
+    const actual = getUsuarioActual();
+    if (pago.usuarioId != null && actual != null && pago.usuarioId !== actual) continue;
     try {
       const { data } = await api.post(`/cobros/clientes/${pago.clienteId}/pagar`, {
         monto: pago.monto,
@@ -444,6 +468,9 @@ const _sincronizarPagosPendientesInterno = async (api) => {
       // Actualizar el registro offline existente con la respuesta real del servidor
       // (no crear uno nuevo — ya fue guardado cuando se registró offline)
       await actualizarHistorialOffline(pago.id, data);
+      // El cobro offline ya llegó al servidor: en el libro queda como enviado y con
+      // el número de recibo REAL (antes tenía uno temporal del teléfono).
+      await actualizarEntradaLibro(pago.id, { estado: 'enviado', ...(data?.numero_recibo ? { numeroRecibo: data.numero_recibo } : {}) });
       await eliminarPago(pago.id);
       backupOffline.registrarSincronizado({
         label: `Cobro ${pago.clienteNombre} — ${pago.numeroRecibo || pago.id}`,
@@ -468,6 +495,7 @@ const _sincronizarPagosPendientesInterno = async (api) => {
       console.warn(`⚠️ Error servidor en cobro ${pago.id}:`, e.message);
       errores.push({ id: pago.id, cliente: pago.clienteNombre, monto: pago.monto, error: e.message });
       await moverARechazados(pago, e.message, statusNum);
+      await actualizarEntradaLibro(pago.id, { estado: 'rechazado', motivo: e.message });
       await eliminarPago(pago.id);
     }
   }
