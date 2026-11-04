@@ -41,25 +41,64 @@ const leerBandeja = async () => {
 const guardarBandeja = (lista) =>
   AsyncStorage.setItem(OUTBOX_KEY, JSON.stringify(lista.slice(-MAX_OUTBOX))).catch(() => {});
 
+// Un reporte que el servidor rechaza por validación (422) no se descarta de golpe: puede
+// ser un servidor que aún no conoce el tipo nuevo (ej. "diferencia" antes de desplegar). Se
+// reintenta cada hora y solo se abandona tras ~2 días.
+const REINTENTO_422_MS = 60 * 60 * 1000;
+const MAX_FALLOS_422 = 48;
+
+const quitarDeBandeja = (ids) => conBloqueo(async () => {
+  const actual = await leerBandeja();
+  await guardarBandeja(actual.filter((e) => !ids.has(e.client_id)));
+});
+
+const marcarFallo422 = (ids) => conBloqueo(async () => {
+  const actual = await leerBandeja();
+  const ahora = Date.now();
+  await guardarBandeja(actual
+    .map((e) => (ids.has(e.client_id)
+      ? { ...e, fallos422: (e.fallos422 || 0) + 1, reintentarDespues: ahora + REINTENTO_422_MS }
+      : e))
+    .filter((e) => (e.fallos422 || 0) < MAX_FALLOS_422));
+});
+
+const enviarLote = (errores) => api.post('/sync-errores', {
+  device_serial: _serial || undefined,
+  app_version: APP_VERSION,
+  errores: errores.map(({ fallos422: _f, reintentarDespues: _r, ...limpio }) => limpio),
+}, { timeout: 15000 });
+
 /** Envía lo que haya en la bandeja. Seguro de llamar muchas veces. */
 export const vaciarReportes = async () => {
   if (enviando) return;
   enviando = true;
   try {
-    const lista = await leerBandeja();
+    const ahora = Date.now();
+    const lista = (await leerBandeja()).filter((e) => !(e.reintentarDespues > ahora));
     if (lista.length === 0) return;
     const lote = lista.slice(0, POR_ENVIO);
-    await api.post('/sync-errores', {
-      device_serial: _serial || undefined,
-      app_version: APP_VERSION,
-      errores: lote,
-    }, { timeout: 15000 });
-    // Se quitan solo los enviados; lo que se agregó mientras tanto se conserva.
-    const enviados = new Set(lote.map((e) => e.client_id));
-    await conBloqueo(async () => {
-      const actual = await leerBandeja();
-      await guardarBandeja(actual.filter((e) => !enviados.has(e.client_id)));
-    });
+    try {
+      await enviarLote(lote);
+      // Se quitan solo los enviados; lo que se agregó mientras tanto se conserva.
+      await quitarDeBandeja(new Set(lote.map((e) => e.client_id)));
+    } catch (e) {
+      if (e?.status !== 422) throw e;
+      // El servidor rechazó el lote por validación: se prueba uno por uno para que un
+      // reporte inválido no bloquee a los demás (antes quedaban todos atascados).
+      const enviados = new Set();
+      const fallidos = new Set();
+      for (const item of lote) {
+        try {
+          await enviarLote([item]);
+          enviados.add(item.client_id);
+        } catch (e2) {
+          if (e2?.status === 422) fallidos.add(item.client_id);
+          else throw e2; // sin red: se reintenta todo luego
+        }
+      }
+      if (enviados.size) await quitarDeBandeja(enviados);
+      if (fallidos.size) await marcarFallo422(fallidos);
+    }
   } catch (e) {
     // Sin red o servidor caído: queda en la bandeja para el próximo intento.
     console.warn('[reporteSync] no se pudo reportar, se reintentará:', e?.message || e);

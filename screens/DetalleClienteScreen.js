@@ -9,6 +9,7 @@ import api, { esErrorTransitorio, TIMEOUT_LECTURA_CACHE } from '../services/api'
 import { asegurarHttps } from '../services/seguridad';
 import { validarMonto } from '../services/limites';
 import { registrarCobroEnLibro } from '../services/libroLocal';
+import { reportarErrorSync } from '../services/reporteSync';
 import { comprimirFoto } from '../services/fotos';
 import { obtenerUbicacion } from '../services/ubicacion';
 import FotoRemota from '../components/FotoRemota';
@@ -441,6 +442,14 @@ export default function DetalleClienteScreen({ navigation, route }) {
             ventaId: cta.venta_id, ventaNumero: cta.venta_numero || null, numeroRecibo: data?.numero_recibo || null,
             monto: aPagar, metodo: metodoAbonoGrupo, estado: 'enviado', origen: 'online',
           });
+          if (Number(data?.monto_sin_cuota) > 0.004) {
+            reportarErrorSync({
+              client_id: `s-${idempotencyKey}`, tipo: 'diferencia', metodo: 'POST',
+              endpoint: `/cobros/clientes/${cta.cliente_id}/pagar`,
+              etiqueta: `Cobro ${cta.clienteNombre} — ${data?.numero_recibo || idempotencyKey}`, monto: aPagar,
+              motivo: `El cobro de $${aPagar.toFixed(2)} incluyó $${Number(data.monto_sin_cuota).toFixed(2)} sin cuota pendiente (se guardó igual, directo al saldo). Revisar las cuotas de la venta ${cta.venta_numero || cta.venta_id}.`,
+            });
+          }
           resultado = { numeroRecibo: data?.numero_recibo || null, ok: true, offline: false };
         } catch (e) {
           resultado = esErrorTransitorio(e) ? await encolarLocal() : { ok: false, offline: false, motivo: e?.message || String(e) };

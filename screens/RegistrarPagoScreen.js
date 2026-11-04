@@ -205,6 +205,17 @@ export default function RegistrarPagoScreen({ navigation, route }) {
         ventaId, ventaNumero, numeroRecibo, monto: montoNum, metodo, referencia: referencia.trim(),
         estado: 'enviado', origen: 'online',
       });
+      // Parte del cobro que no tenía cuota pendiente donde aplicarse (la venta tiene datos
+      // inconsistentes): el servidor la guardó igual, directo al saldo. No se le dice nada al
+      // cobrador (el cobro quedó completo), pero se avisa a la oficina para que corrija las cuotas.
+      if (Number(data?.monto_sin_cuota) > 0.004) {
+        reportarErrorSync({
+          client_id: `s-${idempotencyKey}`, tipo: 'diferencia', metodo: 'POST',
+          endpoint: `/cobros/clientes/${cliente.id}/pagar`,
+          etiqueta: `Cobro ${cliente.nombre} — ${numeroRecibo}`, monto: montoNum,
+          motivo: `El cobro de $${montoNum.toFixed(2)} incluyó $${Number(data.monto_sin_cuota).toFixed(2)} sin cuota pendiente (se guardó igual, directo al saldo). Revisar las cuotas de la venta ${ventaNumero || ventaId}.`,
+        });
+      }
       // El servidor ahora devuelve lo que REALMENTE aplicó (monto_aplicado). Si no es
       // lo que se cobró, se avisa en el momento y se reporta al panel.
       if (data?.monto_aplicado != null && Math.abs(Number(data.monto_aplicado) - montoNum) >= 0.005) {
