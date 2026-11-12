@@ -13,7 +13,11 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSSpeechRecognitionUsageDescription": "Esta app necesita reconocimiento de voz para buscar clientes por voz.",
+        "NSMicrophoneUsageDescription": "Esta app necesita el micrófono para buscar clientes por voz."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -27,7 +31,10 @@
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_LOCATION"
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
       ]
     },
     "web": {
@@ -60,16 +67,18 @@
         {
           "microphonePermission": "Esta app necesita el micrófono para buscar clientes por voz.",
           "speechRecognitionPermission": "Esta app necesita reconocimiento de voz para buscar clientes por voz.",
-          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox"
+          ]
         }
       ]
     ],
     "extra": {
       "EXPO_PUBLIC_API_URL": "https://panel.distribuidorabriancescomenjivar.com/api",
       "eas": {
-        "projectId": "f8e3fe95-33b0-4379-a651-debc63eb6d21"
+        "projectId": "9dbce97a-571c-443b-8c6f-c572d0c31c1a"
       }
     },
-    "owner": "gabosv3"
+    "owner": "gabosv03"
   }
 }
